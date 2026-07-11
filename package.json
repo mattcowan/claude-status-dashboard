@@ -1,0 +1,13 @@
+{
+  "name": "claude-status-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Kanban dashboard tracking the status of every Claude Code session.",
+  "type": "commonjs",
+  "bin": {
+    "claude-status": "bin/status.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

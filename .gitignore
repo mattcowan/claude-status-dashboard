@@ -1,0 +1,14 @@
+# Runtime data — live session state (headlines, task descriptions, project and
+# file paths, "where it left off" summaries) from every session across every
+# project. May contain proprietary/client info. NEVER commit this.
+/data/
+
+# Dependencies
+node_modules/
+
+# Playwright / browser artifacts (created during local UI testing)
+.playwright-mcp/
+playwright-profile/
+
+# Ad-hoc screenshots
+*.png
