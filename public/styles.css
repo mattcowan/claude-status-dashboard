@@ -229,6 +229,15 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   color: var(--muted);
 }
 .badge.project { color: var(--text); }
+a.badge.repo {
+  color: var(--accent-plain);
+  text-decoration: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-2); }
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }
@@ -308,7 +317,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
 .hidden { display: none !important; }
 
-@media (max-width: 900px) {
-  .board, .board.show-done { grid-template-columns: 1fr; }
-  .column > .col-head { position: static; }
+@media (max-width: 720px) {
+  /* Stack columns vertically on small screens (.board is flex, so switch its
+     direction rather than setting grid-template-columns, which would no-op). */
+  .board { flex-direction: column; overflow-x: visible; }
+  .column { flex: 1 1 auto; width: 100%; }
+  .add-col-tile { flex: 1 1 auto; width: 100%; min-height: 56px; }
 }

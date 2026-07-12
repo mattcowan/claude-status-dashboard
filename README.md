@@ -66,9 +66,10 @@ node bin/status.js done-for-review
 ```
 
 **Session resolution** (so Claude rarely needs to know its id): `--session <id>`
-→ `CLAUDE_SESSION_ID` env → the most-recently-active non-done card whose project
-equals the current working directory. The `SessionStart` hook also injects the
-session id into Claude's context.
+→ the `CLAUDE_CODE_SESSION_ID` env var Claude Code exposes to Bash → the
+most-recently-active non-done card whose project equals the current working
+directory. If no card exists yet (e.g. a `/post-status` in a session that
+predates the hooks), the CLI creates one.
 
 ## Hooks (installed in `~/.claude/settings.json`)
 

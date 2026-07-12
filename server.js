@@ -12,11 +12,20 @@ const url = require('url');
 
 const config = require('./lib/config');
 const { Store } = require('./lib/store');
+const repo = require('./lib/repo');
 
 const VERSION = '1.0.0';
 const store = new Store();
+// Backfill GitHub/remote links for cards created before this feature existed.
+store.ensureRepoUrls(repo.webUrl);
 
-const PUBLIC_DIR = path.join(config.ROOT, 'public');
+const PUBLIC_DIR = path.resolve(config.ROOT, 'public');
+
+// decodeURIComponent throws on malformed %-encoding; return null so callers can
+// answer 400 instead of crashing the request (or the process).
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch (_) { return null; }
+}
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -52,11 +61,14 @@ function readBody(req) {
 }
 
 function serveStatic(req, res, pathname) {
-  let rel = pathname === '/' ? '/index.html' : pathname;
-  rel = decodeURIComponent(rel).replace(/\\/g, '/');
-  // Prevent path traversal.
-  const target = path.normalize(path.join(PUBLIC_DIR, rel));
-  if (!target.startsWith(PUBLIC_DIR)) {
+  const decoded = safeDecode(pathname === '/' ? '/index.html' : pathname);
+  if (decoded === null) { res.writeHead(400); res.end('Bad request'); return; }
+  const rel = decoded.replace(/\\/g, '/');
+  // Prevent path traversal: resolve, then require the result to be PUBLIC_DIR
+  // itself or a path beneath it (a path.sep boundary, so "public2" can't match
+  // a "public" prefix).
+  const target = path.resolve(path.join(PUBLIC_DIR, rel));
+  if (target !== PUBLIC_DIR && !target.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403); res.end('Forbidden'); return;
   }
   fs.readFile(target, (err, buf) => {
@@ -93,11 +105,12 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, { cards: store.listArchive() });
   }
 
-  // Session upsert (SessionStart hook)
+  // Session upsert (first-prompt hook / CLI)
   if (method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
-    const card = store.upsertSession(body.session, body.project, body.source);
+    const repoUrl = body.project ? repo.webUrl(body.project) : null;
+    const card = store.upsertSession(body.session, body.project, body.source, repoUrl);
     return sendJson(res, 200, { card });
   }
 
@@ -132,7 +145,8 @@ async function handleApi(req, res, pathname, query) {
   }
   const cm = pathname.match(/^\/api\/columns\/([^/]+)(?:\/([^/]+))?$/);
   if (cm) {
-    const key = decodeURIComponent(cm[1]);
+    const key = safeDecode(cm[1]);
+    if (key === null) return sendJson(res, 400, { error: 'bad url encoding' });
     const action = cm[2] || null;
 
     if (method === 'POST' && !action) {
@@ -163,7 +177,8 @@ async function handleApi(req, res, pathname, query) {
   // Per-card routes: /api/cards/:id[/action]
   const m = pathname.match(/^\/api\/cards\/([^/]+)(?:\/([^/]+))?$/);
   if (m) {
-    const id = decodeURIComponent(m[1]);
+    const id = safeDecode(m[1]);
+    if (id === null) return sendJson(res, 400, { error: 'bad url encoding' });
     const action = m[2] || null;
 
     if (method === 'POST' && !action) {

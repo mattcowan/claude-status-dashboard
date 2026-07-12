@@ -28,7 +28,17 @@ function el(tag, attrs, children) {
 }
 
 function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// "https://github.com/owner/repo" -> "owner/repo" for a compact link label.
+function repoShortLabel(url) {
+  try {
+    const parts = new URL(url).pathname.split('/').filter(Boolean);
+    return parts.slice(-2).join('/') || url;
+  } catch (_) { return url; }
 }
 
 function colOf(key) { return state.columns.find((c) => c.key === key) || null; }
@@ -186,6 +196,15 @@ function cardNode(card, inArchive) {
   const proj = badge('project', ['📁 ' + (card.projectLabel || '(unknown)')]);
   if (card.project) proj.setAttribute('title', card.project);
   badges.appendChild(proj);
+  if (card.repoUrl) {
+    badges.appendChild(el('a', {
+      class: 'badge repo',
+      href: card.repoUrl,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: card.repoUrl,
+    }, ['↗ ' + repoShortLabel(card.repoUrl)]));
+  }
   if (card.autoMoved || (card.leftOff && card.leftOff.auto)) badges.appendChild(badge('auto', ['⚙ auto-captured']));
   if (!inArchive) {
     if (card.sessionEndedAt) badges.appendChild(badge('ended', [el('span', { class: 'live-dot' }, []), 'ended']));
