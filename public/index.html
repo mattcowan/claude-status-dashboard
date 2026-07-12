@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Claude Session Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23171b21'/%3E%3Crect x='6' y='7' width='5' height='14' rx='1.5' fill='%234c8dff'/%3E%3Crect x='13.5' y='7' width='5' height='10' rx='1.5' fill='%23f5a623'/%3E%3Crect x='21' y='7' width='5' height='7' rx='1.5' fill='%2335c46b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1><span class="dot"></span> Claude Sessions</h1>
+
+    <span class="control">
+      <label for="projectFilter">Project</label>
+      <select id="projectFilter"><option value="">All projects</option></select>
+    </span>
+
+    <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
+    <button type="button" class="ghost small" id="addColumn">＋ Column</button>
+    <button type="button" class="ghost small" id="archiveView">Archive…</button>
+    <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
+
+    <span class="spacer"></span>
+    <span class="refresh-note" id="refreshNote"></span>
+  </header>
+
+  <main id="boardView" class="board">
+    <!-- columns injected by app.js -->
+  </main>
+
+  <section id="archiveSection" class="archive-view hidden">
+    <h2>Archived (done) sessions</h2>
+    <div class="archive-list" id="archiveList"></div>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>
