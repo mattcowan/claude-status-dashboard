@@ -345,10 +345,21 @@ function columnHead(col, count, index, visibleKeys) {
     controls.appendChild(el('button', { class: 'col-btn danger', title: 'Delete column', onclick: () => deleteColumn(col) }, ['×']));
   }
 
+  // The Done column gets an always-visible "Dump → archive" button (mirrors the
+  // topbar action), but only when it actually holds cards to move.
+  const doneArchive = (col.kind === 'done' && count > 0)
+    ? el('button', {
+        class: 'small ghost col-head-action',
+        title: 'Move all done cards to the archive',
+        onclick: archiveDone,
+      }, ['Dump → archive'])
+    : null;
+
   return el('div', { class: 'col-head' }, [
     el('span', { class: 'swatch', style: 'background:' + col.color }, []),
     el('span', { class: 'col-label', text: col.label }, []),
     el('span', { class: 'count', text: String(count) }, []),
+    doneArchive,
     controls,
   ]);
 }
@@ -465,6 +476,12 @@ function openDeleteModal(col, count) {
 
 // ---------- view controls ----------
 
+// Move every card in the Done column into the archive.
+async function archiveDone() {
+  await api('POST', '/api/archive-done');
+  refresh();
+}
+
 // Expand every visible card, or collapse them all.
 function setAllExpanded(expand) {
   if (expand) {
@@ -499,10 +516,7 @@ document.getElementById('archiveView').addEventListener('click', () => {
   document.getElementById('archiveView').textContent = state.archiveOpen ? '← Back to board' : 'Archive…';
   if (state.archiveOpen) refreshArchive();
 });
-document.getElementById('archiveDone').addEventListener('click', async () => {
-  await api('POST', '/api/archive-done');
-  refresh();
-});
+document.getElementById('archiveDone').addEventListener('click', archiveDone);
 
 refresh();
 setInterval(() => { if (!state.archiveOpen) refresh(); }, 3000);

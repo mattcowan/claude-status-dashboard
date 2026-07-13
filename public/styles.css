@@ -148,6 +148,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   opacity: 0;
   transition: opacity .12s;
 }
+/* Always-visible per-column action (Done column's "Dump → archive"). The
+   margin-left:auto pushes it to the right edge of the header. */
+.col-head .col-head-action { margin-left: auto; padding: 3px 8px; font-size: 11.5px; }
+.col-head .col-head-action + .col-controls { margin-left: 6px; }
 .column:hover .col-controls { opacity: 1; }
 .col-btn {
   background: transparent;
