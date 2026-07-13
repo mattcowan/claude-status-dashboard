@@ -20,6 +20,7 @@ function loadPrefs() {
     const raw = localStorage.getItem(PREFS_KEY);
     const p = raw ? JSON.parse(raw) : {};
     state.fillWidth = p.fillWidth !== false;   // default ON
+    state.showDone = p.showDone === true;      // default OFF
     state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
   } catch (_) { /* storage unavailable — keep defaults */ }
 }
@@ -29,7 +30,7 @@ function savePrefs() {
     // Prune expanded ids to cards currently on the board so it can't grow unbounded.
     const onBoard = new Set(state.cards.map((c) => c.id));
     const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -502,7 +503,9 @@ function setAllExpanded(expand) {
 loadPrefs();
 
 document.getElementById('projectFilter').addEventListener('change', (e) => { state.project = e.target.value; refresh(); });
-document.getElementById('showDone').addEventListener('change', (e) => { state.showDone = e.target.checked; render(); });
+const showDoneEl = document.getElementById('showDone');
+showDoneEl.checked = state.showDone;
+showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked; savePrefs(); render(); });
 const fillWidthEl = document.getElementById('fillWidth');
 fillWidthEl.checked = state.fillWidth;
 fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.checked; savePrefs(); render(); });
