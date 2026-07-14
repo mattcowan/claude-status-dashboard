@@ -96,6 +96,8 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
 .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
 
+.btn-group { display: inline-flex; gap: 6px; }
+
 .refresh-note { font-size: 12px; color: var(--muted-2); min-width: 120px; text-align: right; }
 
 /* Board — horizontal scroll so any number of columns fits */
@@ -116,6 +118,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   display: flex;
   flex-direction: column;
 }
+/* Fill-width mode: columns grow equally to fill wide screens but never shrink
+   below today's 300px — min-width keeps the board's overflow-x scroll working
+   once there are too many columns to fit. */
+.board.fill .column { flex: 1 1 300px; min-width: 300px; }
 .column.dragover { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .column > .col-head {
   display: flex; align-items: center; gap: 8px;
@@ -142,6 +148,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   opacity: 0;
   transition: opacity .12s;
 }
+/* Always-visible per-column action (Done column's "Dump → archive"). The
+   margin-left:auto pushes it to the right edge of the header. */
+.col-head .col-head-action { margin-left: auto; padding: 3px 8px; font-size: 11.5px; }
+.col-head .col-head-action + .col-controls { margin-left: 6px; }
 .column:hover .col-controls { opacity: 1; }
 .col-btn {
   background: transparent;
@@ -212,6 +222,23 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .card.col-task_completed { --col: var(--completed); }
 .card.col-done { --col: var(--done); }
 
+.card-head { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 6px; }
+.card-head .headline { flex: 1 1 auto; margin: 0; min-width: 0; }
+.card-caret {
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: transform .12s;
+}
+.card-caret:hover { background: var(--panel); border-color: var(--border); color: var(--text); }
+.card-caret.open { transform: rotate(90deg); }
+
 .card .headline { font-weight: 620; font-size: 14px; margin: 0 0 6px; }
 .card .headline .placeholder { color: var(--muted-2); font-weight: 500; font-style: italic; }
 
@@ -238,6 +265,7 @@ a.badge.repo {
   white-space: nowrap;
 }
 a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-2); }
+.badge.model { color: var(--accent-plain); border-color: rgba(76,141,255,.35); background: rgba(76,141,255,.10); }
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }

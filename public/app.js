@@ -7,9 +7,47 @@ const state = {
   showDone: false,
   archiveOpen: false,
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
+  fillWidth: true,         // columns grow to fill wide screens (persisted)
+  expanded: new Set(),     // card ids explicitly expanded (default is collapsed; persisted)
 };
 
+// ---------- preferences (localStorage) ----------
+
+const PREFS_KEY = 'claude-dashboard-prefs';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    const p = raw ? JSON.parse(raw) : {};
+    state.fillWidth = p.fillWidth !== false;   // default ON
+    state.showDone = p.showDone === true;      // default OFF
+    state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
+  } catch (_) { /* storage unavailable — keep defaults */ }
+}
+
+function savePrefs() {
+  try {
+    // Prune expanded ids to cards currently on the board so it can't grow unbounded.
+    const onBoard = new Set(state.cards.map((c) => c.id));
+    const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, expanded }));
+  } catch (_) { /* best effort */ }
+}
+
 // ---------- helpers ----------
+
+// "claude-opus-4-8" -> "Opus 4.8"; "claude-haiku-4-5-20251001" -> "Haiku 4.5".
+// Falls back to the raw id when it doesn't match the expected shape.
+function prettyModel(id) {
+  if (!id) return '';
+  let s = String(id).replace(/\[1m\]$/i, '').replace(/-\d{8}$/, '');
+  const m = s.match(/(opus|sonnet|haiku|fable)-?(.*)$/i);
+  if (!m) return String(id);
+  const family = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
+  const version = m[2].replace(/[-_]/g, '.').replace(/\.+$/, '');
+  const oneMillion = /\[1m\]$/i.test(String(id)) ? ' (1M)' : '';
+  return (version ? family + ' ' + version : family) + oneMillion;
+}
 
 function el(tag, attrs, children) {
   const node = document.createElement(tag);
@@ -187,10 +225,34 @@ function cardNode(card, inArchive) {
     });
   }
 
-  const headline = card.headline
+  // Collapsed is the default; only ids explicitly expanded show full detail.
+  // Archived cards are always shown expanded (no collapse affordance there).
+  const isExpanded = inArchive || state.expanded.has(card.id);
+
+  const headlineEl = card.headline
     ? el('div', { class: 'headline', text: card.headline }, [])
     : el('div', { class: 'headline' }, [el('span', { class: 'placeholder', text: '(no headline yet)' }, [])]);
-  node.appendChild(headline);
+
+  const head = el('div', { class: 'card-head' }, [headlineEl]);
+  if (!inArchive) {
+    const caret = el('button', {
+      class: 'card-caret' + (isExpanded ? ' open' : ''),
+      title: isExpanded ? 'Collapse' : 'Expand',
+      'aria-expanded': isExpanded ? 'true' : 'false',
+      'aria-label': isExpanded ? 'Collapse card' : 'Expand card',
+      onclick: (e) => {
+        e.stopPropagation();
+        if (state.expanded.has(card.id)) state.expanded.delete(card.id);
+        else state.expanded.add(card.id);
+        savePrefs();
+        render();
+      },
+    }, ['▸']);
+    // Don't let a press on the caret start a card drag.
+    caret.addEventListener('mousedown', (e) => e.stopPropagation());
+    head.appendChild(caret);
+  }
+  node.appendChild(head);
 
   const badges = el('div', { class: 'badges' }, []);
   const proj = badge('project', ['📁 ' + (card.projectLabel || '(unknown)')]);
@@ -205,6 +267,7 @@ function cardNode(card, inArchive) {
       title: card.repoUrl,
     }, ['↗ ' + repoShortLabel(card.repoUrl)]));
   }
+  if (card.model) badges.appendChild(badge('model', [prettyModel(card.model)]));
   if (card.autoMoved || (card.leftOff && card.leftOff.auto)) badges.appendChild(badge('auto', ['⚙ auto-captured']));
   if (!inArchive) {
     if (card.sessionEndedAt) badges.appendChild(badge('ended', [el('span', { class: 'live-dot' }, []), 'ended']));
@@ -212,30 +275,32 @@ function cardNode(card, inArchive) {
   }
   node.appendChild(badges);
 
-  if (card.body) node.appendChild(renderBody(card.body));
+  if (isExpanded) {
+    if (card.body) node.appendChild(renderBody(card.body));
 
-  if (card.leftOff && card.leftOff.text) {
-    node.appendChild(el('div', { class: 'leftoff' }, [
-      el('span', { class: 'lo-label', text: 'Where it left off' }, []),
-      document.createTextNode(card.leftOff.text),
+    if (card.leftOff && card.leftOff.text) {
+      node.appendChild(el('div', { class: 'leftoff' }, [
+        el('span', { class: 'lo-label', text: 'Where it left off' }, []),
+        document.createTextNode(card.leftOff.text),
+      ]));
+    }
+
+    if (card.externalEdits && card.externalEdits.length) {
+      const ul = el('ul', {}, card.externalEdits.map((f) => el('li', { text: f }, [])));
+      node.appendChild(el('div', { class: 'external' }, [
+        el('span', { class: 'ex-label', text: '⚠ Edits outside this project' }, []),
+        ul,
+      ]));
+    }
+
+    node.appendChild(el('div', { class: 'meta' }, [
+      'active ' + relTime(card.lastActiveAt) + ' (' + clockTime(card.lastActiveAt) + ')',
+      card.createdAt ? el('span', { text: ' · started ' + relTime(card.createdAt) + ' (' + clockTime(card.createdAt) + ')' }, []) : null,
     ]));
-  }
 
-  if (card.externalEdits && card.externalEdits.length) {
-    const ul = el('ul', {}, card.externalEdits.map((f) => el('li', { text: f }, [])));
-    node.appendChild(el('div', { class: 'external' }, [
-      el('span', { class: 'ex-label', text: '⚠ Edits outside this project' }, []),
-      ul,
-    ]));
-  }
-
-  node.appendChild(el('div', { class: 'meta' }, [
-    'active ' + relTime(card.lastActiveAt) + ' (' + clockTime(card.lastActiveAt) + ')',
-    card.createdAt ? el('span', { text: ' · started ' + relTime(card.createdAt) + ' (' + clockTime(card.createdAt) + ')' }, []) : null,
-  ]));
-
-  if (Array.isArray(card.history) && card.history.length) {
-    node.appendChild(historyNode(card.history, card.id));
+    if (Array.isArray(card.history) && card.history.length) {
+      node.appendChild(historyNode(card.history, card.id));
+    }
   }
 
   const actions = el('div', { class: 'actions' }, []);
@@ -281,10 +346,21 @@ function columnHead(col, count, index, visibleKeys) {
     controls.appendChild(el('button', { class: 'col-btn danger', title: 'Delete column', onclick: () => deleteColumn(col) }, ['×']));
   }
 
+  // The Done column gets an always-visible "Dump → archive" button (mirrors the
+  // topbar action), but only when it actually holds cards to move.
+  const doneArchive = (col.kind === 'done' && count > 0)
+    ? el('button', {
+        class: 'small ghost col-head-action',
+        title: 'Move all done cards to the archive',
+        onclick: archiveDone,
+      }, ['Dump → archive'])
+    : null;
+
   return el('div', { class: 'col-head' }, [
     el('span', { class: 'swatch', style: 'background:' + col.color }, []),
     el('span', { class: 'col-label', text: col.label }, []),
     el('span', { class: 'count', text: String(count) }, []),
+    doneArchive,
     controls,
   ]);
 }
@@ -292,6 +368,7 @@ function columnHead(col, count, index, visibleKeys) {
 function render() {
   const board = document.getElementById('boardView');
   board.innerHTML = '';
+  board.classList.toggle('fill', state.fillWidth);
 
   const visible = state.columns.filter((c) => c.kind !== 'done' || state.showDone);
   const visibleKeys = visible.map((c) => c.key);
@@ -398,10 +475,42 @@ function openDeleteModal(col, count) {
   document.body.appendChild(overlay);
 }
 
+// ---------- view controls ----------
+
+// Move every card in the Done column into the archive.
+async function archiveDone() {
+  await api('POST', '/api/archive-done');
+  refresh();
+}
+
+// Expand every visible card, or collapse them all.
+function setAllExpanded(expand) {
+  if (expand) {
+    const visibleDone = state.showDone;
+    state.cards.forEach((c) => {
+      if (c.column === 'done' && !visibleDone) return;
+      state.expanded.add(c.id);
+    });
+  } else {
+    state.expanded.clear();
+  }
+  savePrefs();
+  render();
+}
+
 // ---------- wiring ----------
 
+loadPrefs();
+
 document.getElementById('projectFilter').addEventListener('change', (e) => { state.project = e.target.value; refresh(); });
-document.getElementById('showDone').addEventListener('change', (e) => { state.showDone = e.target.checked; render(); });
+const showDoneEl = document.getElementById('showDone');
+showDoneEl.checked = state.showDone;
+showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked; savePrefs(); render(); });
+const fillWidthEl = document.getElementById('fillWidth');
+fillWidthEl.checked = state.fillWidth;
+fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.checked; savePrefs(); render(); });
+document.getElementById('expandAll').addEventListener('click', () => setAllExpanded(true));
+document.getElementById('collapseAll').addEventListener('click', () => setAllExpanded(false));
 document.getElementById('addColumn').addEventListener('click', addColumn);
 document.getElementById('archiveView').addEventListener('click', () => {
   state.archiveOpen = !state.archiveOpen;
@@ -410,10 +519,7 @@ document.getElementById('archiveView').addEventListener('click', () => {
   document.getElementById('archiveView').textContent = state.archiveOpen ? '← Back to board' : 'Archive…';
   if (state.archiveOpen) refreshArchive();
 });
-document.getElementById('archiveDone').addEventListener('click', async () => {
-  await api('POST', '/api/archive-done');
-  refresh();
-});
+document.getElementById('archiveDone').addEventListener('click', archiveDone);
 
 refresh();
 setInterval(() => { if (!state.archiveOpen) refresh(); }, 3000);

@@ -110,7 +110,7 @@ async function handleApi(req, res, pathname, query) {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
     const repoUrl = body.project ? repo.webUrl(body.project) : null;
-    const card = store.upsertSession(body.session, body.project, body.source, repoUrl);
+    const card = store.upsertSession(body.session, body.project, body.source, repoUrl, body.model);
     return sendJson(res, 200, { card });
   }
 
@@ -124,6 +124,9 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'POST' && pathname === '/api/hook/stop') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
+    // Record the model regardless of column (the backstop only acts on
+    // 'working', but a switched model should still be captured everywhere).
+    if (body.model) store.setModel(body.session, body.model);
     const card = store.applyStopBackstop(body.session, body.leftOff || '');
     return sendJson(res, 200, { card });
   }
