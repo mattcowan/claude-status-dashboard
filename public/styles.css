@@ -100,6 +100,64 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
 .refresh-note { font-size: 12px; color: var(--muted-2); min-width: 120px; text-align: right; }
 
+/* Usage-limits strip (data from the undocumented OAuth usage endpoint) */
+.usage-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 7px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+.u-meter { display: inline-flex; align-items: center; gap: 7px; }
+.u-label { font-weight: 550; color: var(--text); }
+.u-bar {
+  position: relative;
+  width: 110px; height: 8px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.u-fill { height: 100%; border-radius: 4px; }
+.u-fill.ok { background: var(--completed); }
+.u-fill.warn { background: var(--needs); }
+.u-fill.crit { background: #e4573d; }
+/* "Even pace" marker: where usage would be if spread evenly across the window.
+   Fill left of it = under pace; right of it = on track to exceed. The tick pokes
+   1px above/below the bar so its ends stay visible against the strip background
+   whatever the fill is doing underneath. */
+.u-pace {
+  position: absolute;
+  top: -1px; bottom: -1px;
+  width: 2px;
+  margin-left: -1px;              /* center the 2px tick on the point */
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--panel);  /* halo so it reads over any fill color */
+  pointer-events: auto;
+}
+.u-pace.over { background: #e4573d; box-shadow: 0 0 0 1px var(--panel); }
+
+/* Windows Forced Colors / high-contrast: author background colors are replaced
+   by the system palette, so the fill and marker would otherwise collapse into
+   the track. Redraw them with system-color keywords, which forced-colors keeps.
+   Colour semantics (green/amber/red, over-pace) are unavailable here — position
+   and the % text carry the meaning instead. */
+@media (forced-colors: active) {
+  .u-bar { border-color: CanvasText; }
+  .u-fill.ok, .u-fill.warn, .u-fill.crit { background-color: Highlight; }
+  .u-pace, .u-pace.over { background-color: CanvasText; box-shadow: none; }
+}
+.u-pct { font-variant-numeric: tabular-nums; color: var(--text); }
+.u-reset { color: var(--muted-2); }
+.u-note { color: var(--muted-2); }
+.u-note.stale { color: var(--warn-text); }
+.u-error { color: var(--warn-text); }
+.u-controls { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.u-controls .u-info { cursor: help; color: var(--muted-2); }
+
 /* Board — horizontal scroll so any number of columns fits */
 .board {
   display: flex;
@@ -241,6 +299,8 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
 .card .headline { font-weight: 620; font-size: 14px; margin: 0 0 6px; }
 .card .headline .placeholder { color: var(--muted-2); font-weight: 500; font-style: italic; }
+/* Auto-generated session title standing in for a real headline */
+.card .headline.auto-title { color: var(--muted); font-weight: 500; font-style: italic; }
 
 .card .body { color: var(--muted); font-size: 13px; margin: 0 0 8px; white-space: normal; }
 .card .body ul { margin: 4px 0 0; padding-left: 18px; }
@@ -267,6 +327,12 @@ a.badge.repo {
 a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-2); }
 .badge.model { color: var(--accent-plain); border-color: rgba(76,141,255,.35); background: rgba(76,141,255,.10); }
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
+.badge.branch { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+a.badge.branch { color: var(--accent-plain); text-decoration: none; }
+a.badge.branch:hover { border-color: var(--accent-plain); background: var(--panel-2); }
+/* Stale session: badge + meta accent only — deliberately no card dimming */
+.badge.stale { color: var(--warn-text); border-color: rgba(217,138,0,.35); background: rgba(245,166,35,.08); }
+.meta.stale { color: var(--warn-text); }
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }
 .badge.ended .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
@@ -335,6 +401,37 @@ a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-
 }
 
 .card .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Plan / transcript links on expanded cards */
+.card-links { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; font-size: 12px; }
+.card-links code {
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wide modal variant (plan viewer) */
+.modal.wide { width: min(760px, 92vw); }
+.plan-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}
 
 .archive-view { padding: 20px; }
 .archive-view h2 { font-size: 15px; margin: 0 0 12px; }

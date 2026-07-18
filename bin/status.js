@@ -178,7 +178,15 @@ async function hookUserPrompt() {
     // Best-effort model read (may be empty on a session's very first prompt,
     // before any assistant line exists — hook-stop backfills it).
     const model = transcript.lastAssistantModel(input.transcript_path);
-    await request('POST', '/api/cards', { session, project: cwd, source: 'prompt', model });
+    // Title/slug/branch from the transcript. The ai-title only exists after
+    // the first assistant turn, so hook-stop is the reliable carrier; empty
+    // values never clobber stored ones server-side.
+    const meta = transcript.sessionMeta(input.transcript_path);
+    await request('POST', '/api/cards', {
+      session, project: cwd, source: 'prompt', model,
+      aiTitle: meta.aiTitle, slug: meta.slug, gitBranch: meta.gitBranch,
+      transcriptPath: input.transcript_path || '',
+    });
   }
   process.exit(0);
 }
@@ -202,7 +210,12 @@ async function hookStop() {
   if (session) {
     const leftOff = transcript.lastAssistantText(input.transcript_path, 280);
     const model = transcript.lastAssistantModel(input.transcript_path);
-    await request('POST', '/api/hook/stop', { session, leftOff, model });
+    const meta = transcript.sessionMeta(input.transcript_path);
+    await request('POST', '/api/hook/stop', {
+      session, leftOff, model,
+      aiTitle: meta.aiTitle, slug: meta.slug, gitBranch: meta.gitBranch,
+      transcriptPath: input.transcript_path || '',
+    });
   }
   process.exit(0);
 }
