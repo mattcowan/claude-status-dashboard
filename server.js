@@ -263,6 +263,7 @@ async function handleApi(req, res, pathname, query) {
 // Serve the markdown of the plan file(s) Claude Code wrote for a session
 // (~/.claude/plans/<slug>*.md), so the UI can show a card's plan in a modal.
 const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
+const MAX_PLAN_BYTES = 5 * 1024 * 1024; // plans are markdown; 5MB is far above real ones
 
 function servePlan(res, id, query) {
   const card = store.getCardAnywhere(id);
@@ -291,9 +292,21 @@ function servePlan(res, id, query) {
     if (!target.startsWith(PLANS_DIR + path.sep)) {
       return sendJson(res, 400, { error: 'bad file' }); // belt and braces
     }
-    fs.readFile(target, 'utf8', (readErr, markdown) => {
-      if (readErr) return sendJson(res, 404, { error: 'plan file unreadable' });
-      sendJson(res, 200, { ok: true, file: name, files: files, markdown: markdown });
+    // lstat (not stat) so a symlink is seen as itself: isFile() is false for a
+    // symlink, directory, device or pipe, so this one check rejects a symlink
+    // escaping the plans dir as well as any non-regular file. Then bound the
+    // size — the markdown is read whole and JSON-stringified into one response
+    // on the single-threaded server, so a huge file would spike memory.
+    fs.lstat(target, (statErr, stats) => {
+      if (statErr) return sendJson(res, 404, { error: 'plan file unreadable' });
+      if (!stats.isFile()) return sendJson(res, 400, { error: 'not a plan file' });
+      if (stats.size > MAX_PLAN_BYTES) {
+        return sendJson(res, 413, { error: 'plan file too large', bytes: stats.size });
+      }
+      fs.readFile(target, 'utf8', (readErr, markdown) => {
+        if (readErr) return sendJson(res, 404, { error: 'plan file unreadable' });
+        sendJson(res, 200, { ok: true, file: name, files: files, markdown: markdown });
+      });
     });
   });
 }
