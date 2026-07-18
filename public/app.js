@@ -9,7 +9,14 @@ const state = {
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
   fillWidth: true,         // columns grow to fill wide screens (persisted)
   expanded: new Set(),     // card ids explicitly expanded (default is collapsed; persisted)
+  notify: false,           // desktop notifications on Needs Input / review (persisted)
+  usage: null,             // last usage-limits snapshot from /api/usage
 };
+
+// Column state from the previous refresh, for notification diffing. null until
+// the first refresh completes so a page load never fires a backlog of toasts.
+let prevColumns = null;
+let sseHealthy = false;
 
 // ---------- preferences (localStorage) ----------
 
@@ -21,6 +28,7 @@ function loadPrefs() {
     const p = raw ? JSON.parse(raw) : {};
     state.fillWidth = p.fillWidth !== false;   // default ON
     state.showDone = p.showDone === true;      // default OFF
+    state.notify = p.notify === true;          // default OFF
     state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
   } catch (_) { /* storage unavailable — keep defaults */ }
 }
@@ -30,7 +38,7 @@ function savePrefs() {
     // Prune expanded ids to cards currently on the board so it can't grow unbounded.
     const onBoard = new Set(state.cards.map((c) => c.id));
     const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -77,6 +85,49 @@ function repoShortLabel(url) {
     const parts = new URL(url).pathname.split('/').filter(Boolean);
     return parts.slice(-2).join('/') || url;
   } catch (_) { return url; }
+}
+
+// A session with no activity for this long gets the 💤 badge (never dimmed).
+const STALE_MS = 10 * 60 * 1000;
+function isStale(card) {
+  if (card.sessionEndedAt || !card.lastActiveAt) return false;
+  const t = new Date(card.lastActiveAt).getTime();
+  return !isNaN(t) && Date.now() - t > STALE_MS;
+}
+
+// Branch link only for github.com repos — other hosts use different tree paths.
+function githubBranchUrl(repoUrl, branch) {
+  if (!repoUrl || !branch) return null;
+  try {
+    if (new URL(repoUrl).hostname !== 'github.com') return null;
+    return repoUrl.replace(/\/$/, '') + '/tree/' + encodeURIComponent(branch);
+  } catch (_) { return null; }
+}
+
+// "C:\Users\me\.claude\projects\foo\abc.jsonl" -> "foo\abc.jsonl"
+function shortPath(p) {
+  const parts = String(p).split(/[/\\]+/).filter(Boolean);
+  return parts.slice(-2).join('\\') || String(p);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    // Fallback for contexts where the async clipboard is unavailable.
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (_) { return false; }
+  }
 }
 
 function colOf(key) { return state.columns.find((c) => c.key === key) || null; }
@@ -152,7 +203,9 @@ async function refresh() {
   const data = (await api('GET', '/api/board' + q)).json;
   state.cards = (data && data.cards) || [];
   state.columns = (data && data.columns) || [];
+  notifyColumnChanges();
   render();
+  refreshUsage(); // fire-and-forget; strip renders when it lands
   await refreshProjects();
   document.getElementById('refreshNote').textContent = 'updated ' + new Date().toLocaleTimeString();
   if (state.archiveOpen) refreshArchive();
@@ -229,9 +282,13 @@ function cardNode(card, inArchive) {
   // Archived cards are always shown expanded (no collapse affordance there).
   const isExpanded = inArchive || state.expanded.has(card.id);
 
+  // Headline fallback chain: explicit headline → the auto-generated session
+  // title from the transcript (the VS Code tab title) → placeholder.
   const headlineEl = card.headline
     ? el('div', { class: 'headline', text: card.headline }, [])
-    : el('div', { class: 'headline' }, [el('span', { class: 'placeholder', text: '(no headline yet)' }, [])]);
+    : (card.autoTitle
+      ? el('div', { class: 'headline auto-title', title: 'Auto-generated session title', text: card.autoTitle }, [])
+      : el('div', { class: 'headline' }, [el('span', { class: 'placeholder', text: '(no headline yet)' }, [])]));
 
   const head = el('div', { class: 'card-head' }, [headlineEl]);
   if (!inArchive) {
@@ -267,8 +324,20 @@ function cardNode(card, inArchive) {
       title: card.repoUrl,
     }, ['↗ ' + repoShortLabel(card.repoUrl)]));
   }
+  if (card.gitBranch) {
+    const branchUrl = githubBranchUrl(card.repoUrl, card.gitBranch);
+    badges.appendChild(branchUrl
+      ? el('a', { class: 'badge branch', href: branchUrl, target: '_blank', rel: 'noopener noreferrer', title: 'Open branch on GitHub' }, ['⎇ ' + card.gitBranch])
+      : el('span', { class: 'badge branch', title: 'Git branch' }, ['⎇ ' + card.gitBranch]));
+  }
   if (card.model) badges.appendChild(badge('model', [prettyModel(card.model)]));
   if (card.autoMoved || (card.leftOff && card.leftOff.auto)) badges.appendChild(badge('auto', ['⚙ auto-captured']));
+  const stale = !inArchive && isStale(card);
+  if (stale) {
+    const b = badge('stale', ['💤 ' + relTime(card.lastActiveAt)]);
+    b.setAttribute('title', 'No activity for over 10 minutes');
+    badges.appendChild(b);
+  }
   if (!inArchive) {
     if (card.sessionEndedAt) badges.appendChild(badge('ended', [el('span', { class: 'live-dot' }, []), 'ended']));
     else badges.appendChild(badge('live', [el('span', { class: 'live-dot' }, []), 'live']));
@@ -293,7 +362,26 @@ function cardNode(card, inArchive) {
       ]));
     }
 
-    node.appendChild(el('div', { class: 'meta' }, [
+    if (card.slug || card.transcriptPath) {
+      const links = el('div', { class: 'card-links' }, []);
+      if (card.slug) {
+        links.appendChild(el('button', { class: 'small ghost', onclick: () => openPlanModal(card) }, ['📄 Plan']));
+      }
+      if (card.transcriptPath) {
+        const code = el('code', { title: card.transcriptPath, text: shortPath(card.transcriptPath) }, []);
+        const copyBtn = el('button', { class: 'small ghost', title: 'Copy transcript path' }, ['📋']);
+        copyBtn.addEventListener('click', async () => {
+          const ok = await copyText(card.transcriptPath);
+          copyBtn.textContent = ok ? 'copied' : 'copy failed';
+          setTimeout(() => { copyBtn.textContent = '📋'; }, 1500);
+        });
+        links.appendChild(code);
+        links.appendChild(copyBtn);
+      }
+      node.appendChild(links);
+    }
+
+    node.appendChild(el('div', { class: 'meta' + (stale ? ' stale' : '') }, [
       'active ' + relTime(card.lastActiveAt) + ' (' + clockTime(card.lastActiveAt) + ')',
       card.createdAt ? el('span', { text: ' · started ' + relTime(card.createdAt) + ' (' + clockTime(card.createdAt) + ')' }, []) : null,
     ]));
@@ -475,6 +563,223 @@ function openDeleteModal(col, count) {
   document.body.appendChild(overlay);
 }
 
+// ---------- plan viewer ----------
+
+// Show the plan file(s) Claude Code wrote for a session (~/.claude/plans).
+// Appended to document.body so the 3s board re-render can't destroy it.
+async function openPlanModal(card) {
+  const overlay = el('div', { class: 'modal-overlay' }, []);
+  const close = () => document.body.removeChild(overlay);
+
+  const title = el('h3', { text: 'Plan — ' + (card.headline || card.autoTitle || card.slug) }, []);
+  const content = el('div', {}, [el('p', { class: 'modal-note', text: 'Loading…' }, [])]);
+  const modal = el('div', { class: 'modal wide' }, [
+    title,
+    content,
+    el('div', { class: 'modal-row' }, [el('button', { class: 'small ghost', onclick: close }, ['Close'])]),
+  ]);
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+
+  async function load(file) {
+    const q = file ? '?file=' + encodeURIComponent(file) : '';
+    const r = await api('GET', '/api/cards/' + encodeURIComponent(card.id) + '/plan' + q);
+    content.innerHTML = '';
+    if (!r.ok || !r.json || !r.json.ok) {
+      content.appendChild(el('p', { class: 'modal-note', text: (r.json && r.json.error) || 'Could not load the plan.' }, []));
+      return;
+    }
+    if (r.json.files && r.json.files.length > 1) {
+      const select = el('select', {},
+        r.json.files.map((f) => el('option', { value: f, text: f, selected: f === r.json.file ? 'selected' : null }, [])));
+      select.addEventListener('change', () => load(select.value));
+      content.appendChild(el('div', { class: 'modal-row' }, [el('span', { text: 'File:' }, []), select]));
+    } else {
+      content.appendChild(el('p', { class: 'modal-note', text: r.json.file }, []));
+    }
+    const pre = el('pre', { class: 'plan-pre' }, []);
+    pre.textContent = r.json.markdown; // textContent keeps it XSS-safe, zero-dep
+    content.appendChild(pre);
+  }
+  load(null);
+}
+
+// ---------- usage limits strip ----------
+
+// Reset time, compact: today -> "resets 3:00 PM"; within a week -> "resets Wed";
+// beyond -> "resets Jul 24, 3:00 PM".
+function formatReset(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const diff = d.getTime() - Date.now();
+  if (diff < 24 * 3600 * 1000) return 'resets ' + clockTime(iso);
+  if (diff < 7 * 24 * 3600 * 1000) return 'resets ' + d.toLocaleDateString([], { weekday: 'short' }) + ' ' + clockTime(iso);
+  return 'resets ' + dateClock(iso);
+}
+
+// Where usage "should" be if it were spread evenly across the window: the
+// fraction of the window already elapsed. window start = resetsAt - windowMs.
+// Returns 0-100, or null when we don't know the window length.
+function pacePercent(b) {
+  if (!b || !b.windowMs || !b.resetsAt) return null;
+  const reset = new Date(b.resetsAt).getTime();
+  if (isNaN(reset)) return null;
+  const remaining = reset - Date.now();
+  const elapsed = b.windowMs - remaining;
+  return Math.max(0, Math.min(100, (elapsed / b.windowMs) * 100));
+}
+
+// Human explanation of the pace marker (hover tooltip).
+function paceTooltip(b, pace) {
+  if (pace == null) return null;
+  const paceR = Math.round(pace);
+  if (b.pct == null) return 'Even pace ≈ ' + paceR + '% used by now';
+  const diff = Math.round(b.pct - pace);
+  const rel = diff > 2 ? diff + '% ahead of pace — on track to exceed'
+    : diff < -2 ? Math.abs(diff) + '% under pace'
+    : 'on pace';
+  return 'Even pace ≈ ' + paceR + '% by now · you’re at ' + Math.round(b.pct) + '% (' + rel + ')';
+}
+
+// Full reset date for the hover tooltip, e.g. "Tue, Jul 21, 2026, 10:00 PM".
+function fullReset(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return 'Resets ' + d.toLocaleString([], {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
+async function refreshUsage() {
+  const r = await api('GET', '/api/usage');
+  if (r.json) { state.usage = r.json; renderUsage(); }
+}
+
+function renderUsage() {
+  const strip = document.getElementById('usageStrip');
+  const u = state.usage;
+  if (!u) { strip.classList.add('hidden'); return; }
+  strip.classList.remove('hidden');
+  strip.innerHTML = '';
+
+  if (u.status === 'never') {
+    strip.appendChild(el('span', { class: 'u-note', text: 'No usage data yet' }, []));
+  } else if (u.status === 'auth' && !(u.buckets && u.buckets.length)) {
+    strip.appendChild(el('span', { class: 'u-error', text: '⚠ Usage unavailable: ' + (u.error || 'auth needed') }, []));
+  } else {
+    (u.buckets || []).forEach((b) => {
+      const pct = b.pct == null ? null : b.pct;
+      const cls = pct == null ? 'ok' : (pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok'));
+      const pace = pacePercent(b);
+      const tip = paceTooltip(b, pace);
+      strip.appendChild(el('span', { class: 'u-meter' }, [
+        el('span', { class: 'u-label', text: b.label }, []),
+        el('span', { class: 'u-bar', title: tip }, [
+          el('span', { class: 'u-fill ' + cls, style: 'display:block;width:' + (pct == null ? 0 : pct) + '%' }, []),
+          pace == null ? null : el('span', {
+            class: 'u-pace' + (pct != null && pct - pace > 2 ? ' over' : ''),
+            style: 'left:' + pace + '%',
+            title: tip,
+          }, []),
+        ]),
+        el('span', { class: 'u-pct', text: pct == null ? '—' : pct + '%' }, []),
+        b.resetsAt ? el('span', { class: 'u-reset', title: fullReset(b.resetsAt), text: formatReset(b.resetsAt) }, []) : null,
+      ]));
+    });
+    if (u.status !== 'ok' && u.error) {
+      strip.appendChild(el('span', { class: 'u-error', text: '⚠ ' + u.error }, []));
+    }
+  }
+
+  const controls = el('span', { class: 'u-controls' }, []);
+  if (u.fetchedAt) {
+    controls.appendChild(el('span', { class: 'u-note' + (u.stale ? ' stale' : ''), text: 'usage as of ' + relTime(u.fetchedAt) }, []));
+  }
+  const refreshBtn = el('button', { class: 'small ghost', title: 'Refresh usage now' }, ['↻']);
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    const r = await api('POST', '/api/usage/refresh');
+    if (r.json) state.usage = r.json;
+    renderUsage();
+  });
+  controls.appendChild(refreshBtn);
+  controls.appendChild(el('span', {
+    class: 'u-info',
+    text: 'ⓘ',
+    title: "Read from Anthropic's undocumented OAuth usage endpoint — buckets and labels may change or break without notice.",
+  }, []));
+  const settingsBtn = el('button', { class: 'small ghost', title: 'Usage settings' }, ['⚙']);
+  settingsBtn.addEventListener('click', openUsageSettings);
+  controls.appendChild(settingsBtn);
+  strip.appendChild(controls);
+}
+
+async function openUsageSettings() {
+  const current = (await api('GET', '/api/settings')).json || { usagePoll: { enabled: false, intervalMs: 600000 } };
+  const overlay = el('div', { class: 'modal-overlay' }, []);
+  const close = () => document.body.removeChild(overlay);
+
+  const enabled = el('input', { type: 'checkbox' }, []);
+  enabled.checked = !!current.usagePoll.enabled;
+  const interval = el('select', {}, [
+    el('option', { value: '300000', text: 'every 5 min' }, []),
+    el('option', { value: '600000', text: 'every 10 min' }, []),
+    el('option', { value: '1800000', text: 'every 30 min' }, []),
+  ]);
+  interval.value = String(current.usagePoll.intervalMs);
+  if (!interval.value) interval.value = '600000';
+
+  const modal = el('div', { class: 'modal' }, [
+    el('h3', { text: 'Usage settings' }, []),
+    el('p', { class: 'modal-note', text: 'Usage refreshes when sessions ping the dashboard and via the ↻ button. Background polling pings the (undocumented) endpoint on a timer even when nothing is active — off by default.' }, []),
+    el('div', { class: 'modal-row' }, [
+      el('label', { class: 'toggle' }, [enabled, ' Auto-poll usage']),
+      interval,
+    ]),
+    el('div', { class: 'modal-row' }, [
+      el('button', { class: 'small primary', onclick: async () => {
+        await api('POST', '/api/settings', {
+          usagePoll: { enabled: enabled.checked, intervalMs: parseInt(interval.value, 10) },
+        });
+        close();
+      } }, ['Save']),
+      el('button', { class: 'small ghost', onclick: close }, ['Cancel']),
+    ]),
+  ]);
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.body.appendChild(overlay);
+}
+
+// ---------- desktop notifications ----------
+
+// Toast when an EXISTING card moves into Needs Input / Ready for Review.
+// prevColumns is null on the first refresh, so a page load never notifies.
+function notifyColumnChanges() {
+  const cards = state.cards;
+  if (prevColumns !== null && state.notify &&
+      typeof Notification !== 'undefined' && Notification.permission === 'granted' &&
+      !document.hasFocus()) {
+    for (const card of cards) {
+      const before = prevColumns.get(card.id);
+      if (!before || before === card.column) continue;
+      if (card.column !== 'needs_input' && card.column !== 'task_completed') continue;
+      try {
+        const n = new Notification(labelOf(card.column) + ': ' + (card.projectLabel || ''), {
+          body: card.headline || card.autoTitle || card.id,
+          tag: card.id, // collapses repeat toasts for the same card
+        });
+        n.onclick = () => window.focus();
+      } catch (_) { /* notifications unavailable */ }
+    }
+  }
+  // Rebuild unconditionally so toggling notify on later has a clean baseline.
+  prevColumns = new Map(cards.map((c) => [c.id, c.column]));
+}
+
 // ---------- view controls ----------
 
 // Move every card in the Done column into the archive.
@@ -521,5 +826,49 @@ document.getElementById('archiveView').addEventListener('click', () => {
 });
 document.getElementById('archiveDone').addEventListener('click', archiveDone);
 
+// Notifications opt-in: permission is requested only from this explicit
+// gesture, never on page load.
+const notifyEl = document.getElementById('notifyToggle');
+notifyEl.checked = state.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+state.notify = notifyEl.checked;
+notifyEl.addEventListener('change', async (e) => {
+  if (!e.target.checked) { state.notify = false; savePrefs(); return; }
+  if (typeof Notification === 'undefined') { e.target.checked = false; return; }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { e.target.checked = false; state.notify = false; savePrefs(); return; }
+  state.notify = true;
+  savePrefs();
+});
+
+// ---------- live updates ----------
+// SSE is the primary signal; polling stays as a fallback (3s when SSE is down,
+// a slow 15s heartbeat when it's healthy, covering missed reconnect windows).
+
+let sseRefreshTimer = null;
+function initSSE() {
+  if (typeof EventSource === 'undefined') return;
+  const es = new EventSource('/api/events');
+  es.addEventListener('changed', () => {
+    // Small debounce so a burst of change events becomes one fetch.
+    if (sseRefreshTimer) return;
+    sseRefreshTimer = setTimeout(() => {
+      sseRefreshTimer = null;
+      if (!state.archiveOpen) refresh().catch(() => {});
+    }, 300);
+  });
+  es.onopen = () => { sseHealthy = true; };
+  es.onerror = () => { sseHealthy = false; }; // EventSource auto-reconnects
+}
+
+function schedulePoll() {
+  setTimeout(async () => {
+    // A failed refresh (server restarting, network hiccup) must never break
+    // the polling chain — that's the whole point of the fallback.
+    try { if (!state.archiveOpen) await refresh(); } catch (_) { /* retry next tick */ }
+    schedulePoll();
+  }, sseHealthy ? 15000 : 3000);
+}
+
 refresh();
-setInterval(() => { if (!state.archiveOpen) refresh(); }, 3000);
+initSSE();
+schedulePoll();

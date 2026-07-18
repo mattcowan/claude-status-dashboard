@@ -7,17 +7,18 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const url = require('url');
 
 const config = require('./lib/config');
 const { Store } = require('./lib/store');
 const repo = require('./lib/repo');
+const usage = require('./lib/usage');
+const settings = require('./lib/settings');
 
-const VERSION = '1.0.0';
+const VERSION = require('./package.json').version;
 const store = new Store();
-// Backfill GitHub/remote links for cards created before this feature existed.
-store.ensureRepoUrls(repo.webUrl);
 
 const PUBLIC_DIR = path.resolve(config.ROOT, 'public');
 
@@ -111,6 +112,8 @@ async function handleApi(req, res, pathname, query) {
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
     const repoUrl = body.project ? repo.webUrl(body.project) : null;
     const card = store.upsertSession(body.session, body.project, body.source, repoUrl, body.model);
+    store.setSessionMeta(body.session, body);
+    usage.maybeRefresh();
     return sendJson(res, 200, { card });
   }
 
@@ -127,7 +130,9 @@ async function handleApi(req, res, pathname, query) {
     // Record the model regardless of column (the backstop only acts on
     // 'working', but a switched model should still be captured everywhere).
     if (body.model) store.setModel(body.session, body.model);
+    store.setSessionMeta(body.session, body);
     const card = store.applyStopBackstop(body.session, body.leftOff || '');
+    usage.maybeRefresh();
     return sendJson(res, 200, { card });
   }
 
@@ -136,7 +141,28 @@ async function handleApi(req, res, pathname, query) {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
     const card = store.markSessionEnded(body.session);
+    usage.maybeRefresh();
     return sendJson(res, 200, { card });
+  }
+
+  // Usage limits (undocumented endpoint — see lib/usage.js caveats)
+  if (method === 'GET' && pathname === '/api/usage') {
+    usage.maybeRefresh(); // opportunistic, throttled
+    return sendJson(res, 200, usage.getSnapshot());
+  }
+  if (method === 'POST' && pathname === '/api/usage/refresh') {
+    return sendJson(res, 200, await usage.fetchUsage({ manual: true }));
+  }
+
+  // Server-side settings
+  if (method === 'GET' && pathname === '/api/settings') {
+    return sendJson(res, 200, settings.getSettings());
+  }
+  if (method === 'POST' && pathname === '/api/settings') {
+    const body = await readBody(req);
+    const merged = settings.updateSettings(body);
+    applyUsagePollTimer();
+    return sendJson(res, 200, merged);
   }
 
   // Column management
@@ -184,6 +210,9 @@ async function handleApi(req, res, pathname, query) {
     if (id === null) return sendJson(res, 400, { error: 'bad url encoding' });
     const action = m[2] || null;
 
+    if (method === 'GET' && action === 'plan') {
+      return servePlan(res, id, query);
+    }
     if (method === 'POST' && !action) {
       const body = await readBody(req);
       const card = store.updateCard(id, body);
@@ -231,12 +260,91 @@ async function handleApi(req, res, pathname, query) {
   return sendJson(res, 404, { error: 'no such endpoint' });
 }
 
+// Serve the markdown of the plan file(s) Claude Code wrote for a session
+// (~/.claude/plans/<slug>*.md), so the UI can show a card's plan in a modal.
+const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
+const MAX_PLAN_BYTES = 5 * 1024 * 1024; // plans are markdown; 5MB is far above real ones
+
+function servePlan(res, id, query) {
+  const card = store.getCardAnywhere(id);
+  if (!card) return sendJson(res, 404, { error: 'card not found' });
+  if (!card.slug) return sendJson(res, 404, { error: 'no plan recorded for this session' });
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(card.slug)) {
+    return sendJson(res, 400, { error: 'invalid slug' });
+  }
+  fs.readdir(PLANS_DIR, (err, entries) => {
+    if (err) return sendJson(res, 404, { error: 'no plan file found', slug: card.slug });
+    const files = entries
+      .filter((f) => f.startsWith(card.slug) && f.endsWith('.md'))
+      .sort();
+    if (!files.length) return sendJson(res, 404, { error: 'no plan file found', slug: card.slug });
+
+    let name = null;
+    if (query.file) {
+      // Must be one of the directory entries we just matched — entries contain
+      // no path separators, so this alone rules out traversal.
+      if (!files.includes(query.file)) return sendJson(res, 400, { error: 'bad file' });
+      name = query.file;
+    } else {
+      name = files.includes(card.slug + '.md') ? card.slug + '.md' : files[0];
+    }
+    const target = path.resolve(PLANS_DIR, name);
+    if (!target.startsWith(PLANS_DIR + path.sep)) {
+      return sendJson(res, 400, { error: 'bad file' }); // belt and braces
+    }
+    // lstat (not stat) so a symlink is seen as itself: isFile() is false for a
+    // symlink, directory, device or pipe, so this one check rejects a symlink
+    // escaping the plans dir as well as any non-regular file. Then bound the
+    // size — the markdown is read whole and JSON-stringified into one response
+    // on the single-threaded server, so a huge file would spike memory.
+    fs.lstat(target, (statErr, stats) => {
+      if (statErr) return sendJson(res, 404, { error: 'plan file unreadable' });
+      if (!stats.isFile()) return sendJson(res, 400, { error: 'not a plan file' });
+      if (stats.size > MAX_PLAN_BYTES) {
+        return sendJson(res, 413, { error: 'plan file too large', bytes: stats.size });
+      }
+      fs.readFile(target, 'utf8', (readErr, markdown) => {
+        if (readErr) return sendJson(res, 404, { error: 'plan file unreadable' });
+        sendJson(res, 200, { ok: true, file: name, files: files, markdown: markdown });
+      });
+    });
+  });
+}
+
+// ---------- SSE (live board updates) ----------
+
+const sseClients = new Set();
+
+function handleEvents(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+  });
+  res.write('retry: 3000\n\n');
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+}
+
+function sseBroadcast(payload) {
+  for (const res of sseClients) {
+    try { res.write(payload); } catch (_) { sseClients.delete(res); }
+  }
+}
+
+store.on('change', () => sseBroadcast('event: changed\ndata: {}\n\n'));
+setInterval(() => sseBroadcast(':hb\n\n'), 25000).unref();
+
 const server = http.createServer((req, res) => {
   const parsed = url.parse(req.url, true);
   const pathname = parsed.pathname;
+  if (req.method === 'GET' && pathname === '/api/events') {
+    return handleEvents(req, res); // long-lived stream; never goes via sendJson
+  }
   if (pathname.startsWith('/api/')) {
     handleApi(req, res, pathname, parsed.query).catch((err) => {
-      sendJson(res, 500, { error: err.message });
+      if (!res.headersSent) sendJson(res, 500, { error: err.message });
+      else { try { res.end(); } catch (_) { /* ignore */ } }
     });
     return;
   }
@@ -261,12 +369,54 @@ server.listen(PORT, config.HOST, () => {
   try { fs.writeFileSync(config.pidFile, String(process.pid)); } catch (_) { /* ignore */ }
   // eslint-disable-next-line no-console
   console.log('[server] Claude status dashboard on ' + config.baseUrl() + ' (pid ' + process.pid + ')');
+  // Backfill GitHub/remote links for cards created before this feature
+  // existed. Async and sequential, AFTER listen: the sync version could stall
+  // startup ~2.5s per project.
+  setImmediate(backfillRepoUrls);
+  applyUsagePollTimer();
 });
+
+async function backfillRepoUrls() {
+  for (const card of store.listCards(null)) {
+    if (!card.project || card.repoUrl) continue;
+    try {
+      const link = await repo.webUrlAsync(card.project);
+      if (link) store.setRepoUrl(card.id, link);
+    } catch (_) { /* best effort */ }
+  }
+}
+
+// Optional background polling of the usage endpoint — an opt-in setting,
+// off by default (the hook-triggered refresh covers active use).
+let usagePollTimer = null;
+function applyUsagePollTimer() {
+  if (usagePollTimer) { clearInterval(usagePollTimer); usagePollTimer = null; }
+  const poll = settings.getSettings().usagePoll;
+  if (!poll.enabled) return;
+  const interval = Math.max(poll.intervalMs, usage.MIN_INTERVAL_MS);
+  usagePollTimer = setInterval(usage.maybeRefresh, interval);
+  usagePollTimer.unref();
+}
 
 function shutdown() {
   try { store.flushSync(); } catch (_) { /* ignore */ }
+  for (const res of sseClients) { try { res.end(); } catch (_) { /* ignore */ } }
   try { server.close(); } catch (_) { /* ignore */ }
   process.exit(0);
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+// Last-resort flushes: 'exit' (must stay synchronous) covers plain
+// process.exit paths, and an uncaught throw shouldn't lose the debounce
+// window. Only flush when a save is actually pending — an instance exiting on
+// EADDRINUSE loaded a snapshot another process has since moved past, and an
+// unconditional flush would clobber the owner's newer file.
+process.on('exit', () => {
+  try { if (store.hasPendingSave()) store.flushSync(); } catch (_) { /* ignore */ }
+});
+process.on('uncaughtException', (err) => {
+  // eslint-disable-next-line no-console
+  console.error('[server] uncaught: ' + ((err && err.stack) || err));
+  try { if (store.hasPendingSave()) store.flushSync(); } catch (_) { /* ignore */ }
+  process.exit(1);
+});

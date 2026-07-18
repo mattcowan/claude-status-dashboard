@@ -18,6 +18,7 @@
 
     <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
     <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>
+    <label class="toggle" title="Desktop notification when a card lands in Needs Input or Ready for Review"><input type="checkbox" id="notifyToggle"> 🔔 Notify</label>
     <span class="btn-group">
       <button type="button" class="ghost small" id="expandAll" title="Expand all cards">⤢ Expand all</button>
       <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
@@ -29,6 +30,8 @@
     <span class="spacer"></span>
     <span class="refresh-note" id="refreshNote"></span>
   </header>
+
+  <div id="usageStrip" class="usage-strip hidden"></div>
 
   <main id="boardView" class="board">
     <!-- columns injected by app.js -->
