@@ -622,7 +622,8 @@ function formatReset(iso) {
 // A meter counts as "over pace" only past this margin, so one sitting a hair
 // above the tick doesn't flicker between states on every refresh.
 const PACE_DEADBAND = 2;
-// Usage is "near the cap" within this many points of 100%.
+// Usage counts as "near the cap" at or above this percentage — i.e. once it is
+// within 10 points of 100%.
 const NEAR_CAP_PCT = 90;
 
 // Where usage "should" be if it were spread evenly across the window: the
@@ -637,14 +638,30 @@ function pacePercent(b) {
   return Math.max(0, Math.min(100, (elapsed / b.windowMs) * 100));
 }
 
+// The single verdict on how usage compares to the even-pace projection:
+// 'over', 'under', or 'on' pace. The fill color, the pace tick, and the tooltip
+// wording all read this one function, so they cannot drift apart — an earlier
+// version compared a rounded delta here and an unrounded one there, which let a
+// bar go amber while the tooltip still read "on pace". Unknown inputs report
+// 'on', the non-alarming direction.
+function pacePosition(pct, pace) {
+  if (pct == null || pace == null) return 'on';
+  const delta = pct - pace;
+  if (delta > PACE_DEADBAND) return 'over';
+  if (delta < -PACE_DEADBAND) return 'under';
+  return 'on';
+}
+
 // Human explanation of the pace marker (hover tooltip).
 function paceTooltip(b, pace) {
   if (pace == null) return null;
   const paceR = Math.round(pace);
   if (b.pct == null) return 'Even pace ≈ ' + paceR + '% used by now';
-  const diff = Math.round(b.pct - pace);
-  const rel = diff > PACE_DEADBAND ? diff + '% ahead of pace — on track to exceed'
-    : diff < -PACE_DEADBAND ? Math.abs(diff) + '% under pace'
+  // pacePosition owns the comparison; round only for display.
+  const diff = Math.round(Math.abs(b.pct - pace));
+  const pos = pacePosition(b.pct, pace);
+  const rel = pos === 'over' ? diff + '% ahead of pace — on track to exceed'
+    : pos === 'under' ? diff + '% under pace'
     : 'on pace';
   return 'Even pace ≈ ' + paceR + '% by now · you’re at ' + Math.round(b.pct) + '% (' + rel + ')';
 }
@@ -657,7 +674,7 @@ function paceTooltip(b, pace) {
 function usageClass(pct, pace) {
   if (pct == null) return 'ok';
   if (pace == null) return pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok');
-  if (pct - pace <= PACE_DEADBAND) return 'ok';
+  if (pacePosition(pct, pace) !== 'over') return 'ok';
   return pct >= NEAR_CAP_PCT ? 'crit' : 'warn';
 }
 
@@ -698,7 +715,7 @@ function renderUsage() {
         el('span', { class: 'u-bar', title: tip }, [
           el('span', { class: 'u-fill ' + cls, style: 'display:block;width:' + (pct == null ? 0 : pct) + '%' }, []),
           pace == null ? null : el('span', {
-            class: 'u-pace' + (pct != null && pct - pace > PACE_DEADBAND ? ' over' : ''),
+            class: 'u-pace' + (pacePosition(pct, pace) === 'over' ? ' over' : ''),
             style: 'left:' + pace + '%',
             title: tip,
           }, []),
