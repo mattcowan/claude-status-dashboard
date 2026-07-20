@@ -619,6 +619,12 @@ function formatReset(iso) {
   return 'resets ' + dateClock(iso);
 }
 
+// A meter counts as "over pace" only past this margin, so one sitting a hair
+// above the tick doesn't flicker between states on every refresh.
+const PACE_DEADBAND = 2;
+// Usage is "near the cap" within this many points of 100%.
+const NEAR_CAP_PCT = 90;
+
 // Where usage "should" be if it were spread evenly across the window: the
 // fraction of the window already elapsed. window start = resetsAt - windowMs.
 // Returns 0-100, or null when we don't know the window length.
@@ -637,10 +643,22 @@ function paceTooltip(b, pace) {
   const paceR = Math.round(pace);
   if (b.pct == null) return 'Even pace ≈ ' + paceR + '% used by now';
   const diff = Math.round(b.pct - pace);
-  const rel = diff > 2 ? diff + '% ahead of pace — on track to exceed'
-    : diff < -2 ? Math.abs(diff) + '% under pace'
+  const rel = diff > PACE_DEADBAND ? diff + '% ahead of pace — on track to exceed'
+    : diff < -PACE_DEADBAND ? Math.abs(diff) + '% under pace'
     : 'on pace';
   return 'Even pace ≈ ' + paceR + '% by now · you’re at ' + Math.round(b.pct) + '% (' + rel + ')';
+}
+
+// Meter color. Usage on its own says little — 70% used is fine 80% into the
+// window and alarming 20% in — so color compares actual usage against the
+// even-pace projection: amber only when ahead of pace, red only when ahead of
+// pace AND within 10 points of the cap. Buckets with no known window length
+// have no pace to compare against and fall back to absolute thresholds.
+function usageClass(pct, pace) {
+  if (pct == null) return 'ok';
+  if (pace == null) return pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok');
+  if (pct - pace <= PACE_DEADBAND) return 'ok';
+  return pct >= NEAR_CAP_PCT ? 'crit' : 'warn';
 }
 
 // Full reset date for the hover tooltip, e.g. "Tue, Jul 21, 2026, 10:00 PM".
@@ -672,15 +690,15 @@ function renderUsage() {
   } else {
     (u.buckets || []).forEach((b) => {
       const pct = b.pct == null ? null : b.pct;
-      const cls = pct == null ? 'ok' : (pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok'));
       const pace = pacePercent(b);
+      const cls = usageClass(pct, pace);
       const tip = paceTooltip(b, pace);
       strip.appendChild(el('span', { class: 'u-meter' }, [
         el('span', { class: 'u-label', text: b.label }, []),
         el('span', { class: 'u-bar', title: tip }, [
           el('span', { class: 'u-fill ' + cls, style: 'display:block;width:' + (pct == null ? 0 : pct) + '%' }, []),
           pace == null ? null : el('span', {
-            class: 'u-pace' + (pct != null && pct - pace > 2 ? ' over' : ''),
+            class: 'u-pace' + (pct != null && pct - pace > PACE_DEADBAND ? ' over' : ''),
             style: 'left:' + pace + '%',
             title: tip,
           }, []),

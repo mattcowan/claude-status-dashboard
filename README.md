@@ -120,6 +120,14 @@ numbers ("Even pace ≈ 54% by now · you're at 52% (on pace)"). The window leng
 is inferred from the bucket kind (5 hours for the session, 7 days for weekly);
 an unrecognized bucket simply shows no marker.
 
+**Color follows pace, not the raw percentage** — a number on its own says little,
+since 70% used is fine 80% into the window and alarming 20% in. Meters stay green
+while at or under pace, turn amber once usage runs ahead of pace, and go red only
+when ahead of pace *and* within 10 points of the cap. So a high-but-on-track meter
+stays green, while a session that burns 30% in its first 15 minutes goes amber
+immediately. (A bucket with no known window length has no pace to compare against
+and falls back to fixed 60% / 85% thresholds.)
+
 Under **Windows Forced Colors / high-contrast**, the meters redraw with system
 colors (track outline + marker in `CanvasText`, fill in `Highlight`) so the bar
 and pace tick stay visible — the color coding is replaced by the tick position
