@@ -619,6 +619,13 @@ function formatReset(iso) {
   return 'resets ' + dateClock(iso);
 }
 
+// A meter counts as "over pace" only past this margin, so one sitting a hair
+// above the tick doesn't flicker between states on every refresh.
+const PACE_DEADBAND = 2;
+// Usage counts as "near the cap" at or above this percentage — i.e. once it is
+// within 10 points of 100%.
+const NEAR_CAP_PCT = 90;
+
 // Where usage "should" be if it were spread evenly across the window: the
 // fraction of the window already elapsed. window start = resetsAt - windowMs.
 // Returns 0-100, or null when we don't know the window length.
@@ -631,16 +638,44 @@ function pacePercent(b) {
   return Math.max(0, Math.min(100, (elapsed / b.windowMs) * 100));
 }
 
+// The single verdict on how usage compares to the even-pace projection:
+// 'over', 'under', or 'on' pace. The fill color, the pace tick, and the tooltip
+// wording all read this one function, so they cannot drift apart — an earlier
+// version compared a rounded delta here and an unrounded one there, which let a
+// bar go amber while the tooltip still read "on pace". Unknown inputs report
+// 'on', the non-alarming direction.
+function pacePosition(pct, pace) {
+  if (pct == null || pace == null) return 'on';
+  const delta = pct - pace;
+  if (delta > PACE_DEADBAND) return 'over';
+  if (delta < -PACE_DEADBAND) return 'under';
+  return 'on';
+}
+
 // Human explanation of the pace marker (hover tooltip).
 function paceTooltip(b, pace) {
   if (pace == null) return null;
   const paceR = Math.round(pace);
   if (b.pct == null) return 'Even pace ≈ ' + paceR + '% used by now';
-  const diff = Math.round(b.pct - pace);
-  const rel = diff > 2 ? diff + '% ahead of pace — on track to exceed'
-    : diff < -2 ? Math.abs(diff) + '% under pace'
+  // pacePosition owns the comparison; round only for display.
+  const diff = Math.round(Math.abs(b.pct - pace));
+  const pos = pacePosition(b.pct, pace);
+  const rel = pos === 'over' ? diff + '% ahead of pace — on track to exceed'
+    : pos === 'under' ? diff + '% under pace'
     : 'on pace';
   return 'Even pace ≈ ' + paceR + '% by now · you’re at ' + Math.round(b.pct) + '% (' + rel + ')';
+}
+
+// Meter color. Usage on its own says little — 70% used is fine 80% into the
+// window and alarming 20% in — so color compares actual usage against the
+// even-pace projection: amber only when ahead of pace, red only when ahead of
+// pace AND within 10 points of the cap. Buckets with no known window length
+// have no pace to compare against and fall back to absolute thresholds.
+function usageClass(pct, pace) {
+  if (pct == null) return 'ok';
+  if (pace == null) return pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok');
+  if (pacePosition(pct, pace) !== 'over') return 'ok';
+  return pct >= NEAR_CAP_PCT ? 'crit' : 'warn';
 }
 
 // Full reset date for the hover tooltip, e.g. "Tue, Jul 21, 2026, 10:00 PM".
@@ -672,15 +707,15 @@ function renderUsage() {
   } else {
     (u.buckets || []).forEach((b) => {
       const pct = b.pct == null ? null : b.pct;
-      const cls = pct == null ? 'ok' : (pct >= 85 ? 'crit' : (pct >= 60 ? 'warn' : 'ok'));
       const pace = pacePercent(b);
+      const cls = usageClass(pct, pace);
       const tip = paceTooltip(b, pace);
       strip.appendChild(el('span', { class: 'u-meter' }, [
         el('span', { class: 'u-label', text: b.label }, []),
         el('span', { class: 'u-bar', title: tip }, [
           el('span', { class: 'u-fill ' + cls, style: 'display:block;width:' + (pct == null ? 0 : pct) + '%' }, []),
           pace == null ? null : el('span', {
-            class: 'u-pace' + (pct != null && pct - pace > 2 ? ' over' : ''),
+            class: 'u-pace' + (pacePosition(pct, pace) === 'over' ? ' over' : ''),
             style: 'left:' + pace + '%',
             title: tip,
           }, []),
