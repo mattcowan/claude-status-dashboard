@@ -844,20 +844,93 @@ notifyEl.addEventListener('change', async (e) => {
 // SSE is the primary signal; polling stays as a fallback (3s when SSE is down,
 // a slow 15s heartbeat when it's healthy, covering missed reconnect windows).
 
+// Exactly one tab opens the stream. A browser allows only 6 concurrent HTTP/1.1
+// connections per origin and an EventSource holds one open indefinitely, so a
+// stream per tab meant six open dashboards saturated the pool: every later fetch
+// (initial board load, card drag) queued forever with no error and no console
+// output. The leader tab holds an exclusive Web Lock, owns the only stream, and
+// fans 'changed' out over BroadcastChannel; followers open no stream at all.
+// The browser releases the lock when the leader closes or crashes, promoting a
+// waiting follower automatically — so this needs no heartbeat-based election.
+const SSE_LOCK = 'claude-board-sse';
+const SSE_CHANNEL = 'claude-board-events';
+const LEADER_BEAT_MS = 10000;
+// Followers fall back to fast polling once the leader has been quiet this long,
+// which covers a leader frozen by tab-discarding (it still holds the lock, so
+// no promotion happens) as well as one whose own stream has dropped.
+const LEADER_STALE_MS = 30000;
+
 let sseRefreshTimer = null;
-function initSSE() {
-  if (typeof EventSource === 'undefined') return;
+let sseChannel = null;
+let isLeader = false;
+let lastLeaderBeat = 0;
+
+function onBoardChanged() {
+  // Small debounce so a burst of change events becomes one fetch.
+  if (sseRefreshTimer) return;
+  sseRefreshTimer = setTimeout(() => {
+    sseRefreshTimer = null;
+    if (!state.archiveOpen) refresh().catch(() => {});
+  }, 300);
+}
+
+function openStream() {
   const es = new EventSource('/api/events');
   es.addEventListener('changed', () => {
-    // Small debounce so a burst of change events becomes one fetch.
-    if (sseRefreshTimer) return;
-    sseRefreshTimer = setTimeout(() => {
-      sseRefreshTimer = null;
-      if (!state.archiveOpen) refresh().catch(() => {});
-    }, 300);
+    onBoardChanged();
+    // BroadcastChannel never echoes to the sender, so the leader refreshes
+    // itself above and notifies everyone else here.
+    if (sseChannel) sseChannel.postMessage({ type: 'changed' });
   });
   es.onopen = () => { sseHealthy = true; };
   es.onerror = () => { sseHealthy = false; }; // EventSource auto-reconnects
+  return es;
+}
+
+function initSSE() {
+  if (typeof EventSource === 'undefined') return;
+
+  // Without both primitives every tab runs its own stream, exactly as before —
+  // still correct, just back to competing for the connection pool. Web Locks
+  // needs a secure context, which 127.0.0.1 and localhost both satisfy.
+  if (typeof BroadcastChannel === 'undefined' || !navigator.locks) {
+    openStream();
+    return;
+  }
+
+  sseChannel = new BroadcastChannel(SSE_CHANNEL);
+  sseChannel.onmessage = (e) => {
+    const msg = e.data || {};
+    if (msg.type === 'changed') {
+      lastLeaderBeat = Date.now();
+      onBoardChanged();
+    } else if (msg.type === 'beat') {
+      lastLeaderBeat = Date.now();
+      sseHealthy = !!msg.healthy;
+    }
+  };
+
+  // Assume the incumbent is working until proven otherwise, so a newly opened
+  // follower doesn't poll hard through the window before the first beat lands.
+  lastLeaderBeat = Date.now();
+  sseHealthy = true;
+
+  // The promise deliberately never settles: the lock is held for the life of
+  // the tab and released only when the tab goes away.
+  navigator.locks.request(SSE_LOCK, () => new Promise(() => {
+    isLeader = true;
+    openStream();
+    setInterval(() => {
+      sseChannel.postMessage({ type: 'beat', healthy: sseHealthy });
+    }, LEADER_BEAT_MS);
+  }));
+}
+
+// The leader answers for its own stream; a follower is only covered while the
+// leader keeps checking in.
+function sseCovered() {
+  if (isLeader || !sseChannel) return sseHealthy;
+  return sseHealthy && (Date.now() - lastLeaderBeat) < LEADER_STALE_MS;
 }
 
 function schedulePoll() {
@@ -866,7 +939,7 @@ function schedulePoll() {
     // the polling chain — that's the whole point of the fallback.
     try { if (!state.archiveOpen) await refresh(); } catch (_) { /* retry next tick */ }
     schedulePoll();
-  }, sseHealthy ? 15000 : 3000);
+  }, sseCovered() ? 15000 : 3000);
 }
 
 refresh();
