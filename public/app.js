@@ -11,6 +11,10 @@ const state = {
   expanded: new Set(),     // card ids explicitly expanded (default is collapsed; persisted)
   notify: false,           // desktop notifications on Needs Input / review (persisted)
   usage: null,             // last usage-limits snapshot from /api/usage
+  noteEditing: null,       // card id whose personal-note editor is open (one at a time)
+  noteDraft: '',           // in-progress note text, kept across board re-renders
+  noteCaret: null,         // caret offset within that draft, restored after a re-render
+  noteFocus: null,         // {id,target:'input'|'button'} focus move queued for after render
 };
 
 // Column state from the previous refresh, for notification diffing. null until
@@ -263,15 +267,198 @@ function historyNode(history, cardId) {
   return details;
 }
 
+// ---------- personal note ----------
+// The human's own field. Written only from here — bin/status.js deliberately has
+// no note subcommand — so a session's own status writes can never overwrite it.
+// Editing is reachable straight from the collapsed card: it's a "where I left
+// off" scratchpad, and making you expand a card first would defeat the purpose.
+
+// Keep in step with MAX_USER_NOTE in lib/store.js, which clamps server-side.
+const MAX_USER_NOTE = 500;
+
+// Names the card in the buttons' accessible labels, so a screen reader hears
+// "Edit note on Fix SSE connection cap" rather than a column of bare "Edit"s.
+function noteCardTitle(card) {
+  return card.headline || card.autoTitle || card.projectLabel || 'this session';
+}
+
+function noteButton(card, cls, label, children) {
+  const btn = el('button', {
+    class: cls,
+    'data-note-btn': card.id,
+    'aria-label': label,
+    onclick: (e) => { e.stopPropagation(); openNoteEditor(card); },
+  }, children);
+  // Match the caret: a press on a control must never start a card drag.
+  btn.addEventListener('mousedown', (e) => e.stopPropagation());
+  return btn;
+}
+
+function noteNode(card, inArchive, editing) {
+  if (editing) return noteEditor(card);
+
+  const text = (card.userNote || '').trim();
+
+  if (!text) {
+    // The archive is a read-only record — no note affordance there.
+    if (inArchive) return null;
+    return el('div', { class: 'usernote empty' }, [
+      noteButton(card, 'un-add', 'Add note to ' + noteCardTitle(card), [
+        el('span', { 'aria-hidden': 'true', text: '✎ ' }, []),
+        'Add note',
+      ]),
+    ]);
+  }
+
+  const label = el('span', { class: 'un-label' }, [
+    el('span', { 'aria-hidden': 'true', text: '📌 ' }, []),
+    'My note',
+    card.userNoteAt ? el('span', { class: 'un-when', text: ' · ' + relTime(card.userNoteAt) }, []) : null,
+  ]);
+
+  const wrap = el('div', { class: 'usernote' }, [
+    label,
+    el('div', { class: 'un-text', text: text }, []),
+  ]);
+  if (!inArchive) {
+    wrap.appendChild(noteButton(card, 'un-edit', 'Edit note on ' + noteCardTitle(card), [
+      el('span', { 'aria-hidden': 'true', text: '✎' }, []),
+    ]));
+  }
+  return wrap;
+}
+
+function noteEditor(card) {
+  const fieldId = 'un-' + card.id;
+
+  const ta = el('textarea', {
+    id: fieldId,
+    class: 'un-input',
+    rows: '3',
+    maxlength: String(MAX_USER_NOTE),
+    placeholder: 'e.g. pick this up Monday — check issue #7 first',
+  }, []);
+  ta.value = state.noteDraft;
+
+  const count = el('span', { class: 'un-count' }, []);
+  const paintCount = () => { count.textContent = state.noteDraft.length + ' / ' + MAX_USER_NOTE; };
+  paintCount();
+
+  // The caret is tracked on every interaction so a background refresh that
+  // rebuilds the board mid-sentence can put it back where it was.
+  const trackCaret = () => { state.noteCaret = ta.selectionStart; };
+  ta.addEventListener('input', () => {
+    state.noteDraft = ta.value;
+    trackCaret();
+    paintCount();
+  });
+  ta.addEventListener('keyup', trackCaret);
+  ta.addEventListener('click', trackCaret);
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeNoteEditor(card.id); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNote(card.id); }
+  });
+  ta.addEventListener('mousedown', (e) => e.stopPropagation());
+
+  return el('div', { class: 'usernote editing' }, [
+    el('label', { class: 'un-label', for: fieldId }, [
+      el('span', { 'aria-hidden': 'true', text: '📌 ' }, []),
+      'My note',
+    ]),
+    ta,
+    el('div', { class: 'un-actions' }, [
+      el('button', { class: 'small primary', onclick: () => saveNote(card.id) }, ['Save']),
+      el('button', { class: 'small ghost', onclick: () => closeNoteEditor(card.id) }, ['Cancel']),
+      count,
+      el('span', { class: 'un-hint', 'aria-hidden': 'true', text: 'Esc to cancel · Ctrl+Enter to save' }, []),
+    ]),
+  ]);
+}
+
+function openNoteEditor(card) {
+  state.noteEditing = card.id;
+  state.noteDraft = card.userNote || '';
+  state.noteCaret = state.noteDraft.length;
+  state.noteFocus = { id: card.id, target: 'input' };
+  render();
+}
+
+function closeNoteEditor(id) {
+  state.noteEditing = null;
+  state.noteDraft = '';
+  state.noteCaret = null;
+  state.noteFocus = { id: id, target: 'button' }; // focus back to the pencil
+  render();
+}
+
+async function saveNote(id) {
+  const r = await api('POST', '/api/cards/' + encodeURIComponent(id), { userNote: state.noteDraft });
+  if (!r.ok) {
+    // Leave the editor open and the draft intact rather than losing what was typed.
+    alert('Could not save the note — it has been left open so nothing is lost.');
+    return;
+  }
+  state.noteEditing = null;
+  state.noteDraft = '';
+  state.noteCaret = null;
+  state.noteFocus = { id: id, target: 'button' };
+  await refresh();
+}
+
+// Which note control currently holds focus, if any. render() rebuilds the board
+// wholesale, so without this a background refresh — one fires ~300ms after every
+// save, over SSE — would drop a keyboard user's focus to the document body.
+function focusedNoteControl() {
+  const a = document.activeElement;
+  if (!a || a === document.body) return null;
+  const btnId = a.getAttribute && a.getAttribute('data-note-btn');
+  if (btnId) return { id: btnId, target: 'button' };
+  // Anywhere inside the open editor (textarea, Save, Cancel) returns to the
+  // field, which beats losing focus entirely on a mid-edit rebuild.
+  if (state.noteEditing && a.closest && a.closest('.usernote.editing')) {
+    return { id: state.noteEditing, target: 'input' };
+  }
+  return null;
+}
+
+// Re-places focus after a rebuild: an explicitly queued move (opening the editor,
+// or returning to the pencil on save/cancel) wins, otherwise whatever note
+// control held focus beforehand is restored.
+function restoreNoteFocus(keep) {
+  const want = state.noteFocus || keep;
+  state.noteFocus = null;
+  if (!want) return;
+
+  if (want.target === 'input') {
+    const ta = document.getElementById('un-' + want.id);
+    if (!ta) return;
+    ta.focus();
+    const pos = state.noteCaret == null ? ta.value.length : Math.min(state.noteCaret, ta.value.length);
+    try { ta.setSelectionRange(pos, pos); } catch (_) { /* older browsers */ }
+    return;
+  }
+  // Card ids aren't guaranteed to be selector-safe, so match by value.
+  const buttons = document.querySelectorAll('[data-note-btn]');
+  for (let i = 0; i < buttons.length; i++) {
+    if (buttons[i].getAttribute('data-note-btn') === want.id) { buttons[i].focus(); return; }
+  }
+}
+
 function cardNode(card, inArchive) {
+  // Drag is suspended while the note editor is open: a textarea inside a
+  // draggable ancestor can't be selected with the mouse, because the drag wins
+  // over the text selection.
+  const editingNote = state.noteEditing === card.id;
+  const draggable = !inArchive && !editingNote;
+
   const node = el('div', {
     class: 'card',
     style: 'border-left-color:' + colorOf(card.column),
-    draggable: inArchive ? null : 'true',
+    draggable: draggable ? 'true' : null,
     'data-id': card.id,
   }, []);
 
-  if (!inArchive) {
+  if (draggable) {
     node.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('text/plain', card.id);
       e.dataTransfer.effectAllowed = 'move';
@@ -344,6 +531,11 @@ function cardNode(card, inArchive) {
   }
   node.appendChild(badges);
 
+  // Personal note and the activity line both show collapsed as well as
+  // expanded — they're the two things worth seeing without opening a card.
+  const note = noteNode(card, inArchive, editingNote);
+  if (note) node.appendChild(note);
+
   if (isExpanded) {
     if (card.body) node.appendChild(renderBody(card.body));
 
@@ -381,11 +573,18 @@ function cardNode(card, inArchive) {
       node.appendChild(links);
     }
 
-    node.appendChild(el('div', { class: 'meta' + (stale ? ' stale' : '') }, [
-      'active ' + relTime(card.lastActiveAt) + ' (' + clockTime(card.lastActiveAt) + ')',
-      card.createdAt ? el('span', { text: ' · started ' + relTime(card.createdAt) + ' (' + clockTime(card.createdAt) + ')' }, []) : null,
-    ]));
+  }
 
+  node.appendChild(el('div', { class: 'meta' + (stale ? ' stale' : '') }, [
+    'active ' + relTime(card.lastActiveAt) + ' (' + clockTime(card.lastActiveAt) + ')',
+    // "started" is detail for a card you've deliberately opened; collapsed
+    // cards stay to the one line that answers "is this still moving?".
+    isExpanded && card.createdAt
+      ? el('span', { text: ' · started ' + relTime(card.createdAt) + ' (' + clockTime(card.createdAt) + ')' }, [])
+      : null,
+  ]));
+
+  if (isExpanded) {
     if (Array.isArray(card.history) && card.history.length) {
       node.appendChild(historyNode(card.history, card.id));
     }
@@ -455,6 +654,9 @@ function columnHead(col, count, index, visibleKeys) {
 
 function render() {
   const board = document.getElementById('boardView');
+  // The board is rebuilt wholesale below, so note who holds focus first —
+  // otherwise a refresh landing mid-edit would silently drop it.
+  const keepNoteFocus = focusedNoteControl();
   board.innerHTML = '';
   board.classList.toggle('fill', state.fillWidth);
 
@@ -489,6 +691,8 @@ function render() {
 
   // Trailing "add column" affordance.
   board.appendChild(el('div', { class: 'add-col-tile', onclick: addColumn, title: 'Add a column' }, ['＋ Add column']));
+
+  restoreNoteFocus(keepNoteFocus);
 }
 
 // ---------- card actions ----------
@@ -879,20 +1083,117 @@ notifyEl.addEventListener('change', async (e) => {
 // SSE is the primary signal; polling stays as a fallback (3s when SSE is down,
 // a slow 15s heartbeat when it's healthy, covering missed reconnect windows).
 
+// Exactly one tab opens the stream. A browser allows only 6 concurrent HTTP/1.1
+// connections per origin and an EventSource holds one open indefinitely, so a
+// stream per tab meant six open dashboards saturated the pool: every later fetch
+// (initial board load, card drag) queued forever with no error and no console
+// output. The leader tab holds an exclusive Web Lock, owns the only stream, and
+// fans 'changed' out over BroadcastChannel; followers open no stream at all.
+// The browser releases the lock when the leader closes or crashes, promoting a
+// waiting follower automatically — so this needs no heartbeat-based election.
+const SSE_LOCK = 'claude-board-sse';
+const SSE_CHANNEL = 'claude-board-events';
+const LEADER_BEAT_MS = 10000;
+// Followers fall back to fast polling once the leader has been quiet this long,
+// which covers a leader frozen by tab-discarding (it still holds the lock, so
+// no promotion happens) as well as one whose own stream has dropped.
+const LEADER_STALE_MS = 30000;
+
 let sseRefreshTimer = null;
-function initSSE() {
-  if (typeof EventSource === 'undefined') return;
+let sseChannel = null;
+let isLeader = false;
+let lastLeaderBeat = 0;
+
+function onBoardChanged() {
+  // Small debounce so a burst of change events becomes one fetch.
+  if (sseRefreshTimer) return;
+  sseRefreshTimer = setTimeout(() => {
+    sseRefreshTimer = null;
+    if (!state.archiveOpen) refresh().catch(() => {});
+  }, 300);
+}
+
+// postMessage throws on a closed channel. Live updates are best-effort — the
+// poll below is the safety net — so a dead channel must never raise past here.
+function channelPost(msg) {
+  if (!sseChannel) return;
+  try { sseChannel.postMessage(msg); } catch (_) { /* polling still covers us */ }
+}
+
+function openStream() {
   const es = new EventSource('/api/events');
   es.addEventListener('changed', () => {
-    // Small debounce so a burst of change events becomes one fetch.
-    if (sseRefreshTimer) return;
-    sseRefreshTimer = setTimeout(() => {
-      sseRefreshTimer = null;
-      if (!state.archiveOpen) refresh().catch(() => {});
-    }, 300);
+    onBoardChanged();
+    // BroadcastChannel never echoes to the sender, so the leader refreshes
+    // itself above and notifies everyone else here.
+    channelPost({ type: 'changed' });
   });
   es.onopen = () => { sseHealthy = true; };
   es.onerror = () => { sseHealthy = false; }; // EventSource auto-reconnects
+  return es;
+}
+
+function initSSE() {
+  if (typeof EventSource === 'undefined') return;
+
+  // Without both primitives every tab runs its own stream, exactly as before —
+  // still correct, just back to competing for the connection pool. Web Locks
+  // needs a secure context, which 127.0.0.1 and localhost both satisfy.
+  if (typeof BroadcastChannel === 'undefined' || !navigator.locks) {
+    openStream();
+    return;
+  }
+
+  // Constructing the channel can throw even where the class exists — restricted
+  // or partitioned storage contexts reject it. Falling back to a private stream
+  // keeps this tab live rather than losing updates over an environment quirk.
+  try {
+    sseChannel = new BroadcastChannel(SSE_CHANNEL);
+  } catch (_) {
+    sseChannel = null;
+    openStream();
+    return;
+  }
+
+  sseChannel.onmessage = (e) => {
+    const msg = e.data || {};
+    if (msg.type === 'changed') {
+      lastLeaderBeat = Date.now();
+      onBoardChanged();
+    } else if (msg.type === 'beat') {
+      lastLeaderBeat = Date.now();
+      sseHealthy = !!msg.healthy;
+    }
+  };
+
+  // Assume the incumbent is working until proven otherwise, so a newly opened
+  // follower doesn't poll hard through the window before the first beat lands.
+  lastLeaderBeat = Date.now();
+  sseHealthy = true;
+
+  // The callback's promise deliberately never settles: the lock is held for the
+  // life of the tab and released only when the tab goes away. The request itself
+  // can still reject, though, and an unhandled rejection would leave this tab
+  // with no stream while its optimistic sseHealthy hid the gap for a further
+  // LEADER_STALE_MS — so fall back to a private stream instead.
+  navigator.locks.request(SSE_LOCK, () => new Promise(() => {
+    isLeader = true;
+    openStream();
+    setInterval(() => {
+      channelPost({ type: 'beat', healthy: sseHealthy });
+    }, LEADER_BEAT_MS);
+  })).catch(() => {
+    if (isLeader) return; // already promoted; the stream above is running
+    sseHealthy = false;   // don't advertise coverage this tab doesn't have
+    openStream();
+  });
+}
+
+// The leader answers for its own stream; a follower is only covered while the
+// leader keeps checking in.
+function sseCovered() {
+  if (isLeader || !sseChannel) return sseHealthy;
+  return sseHealthy && (Date.now() - lastLeaderBeat) < LEADER_STALE_MS;
 }
 
 function schedulePoll() {
@@ -901,9 +1202,12 @@ function schedulePoll() {
     // the polling chain — that's the whole point of the fallback.
     try { if (!state.archiveOpen) await refresh(); } catch (_) { /* retry next tick */ }
     schedulePoll();
-  }, sseHealthy ? 15000 : 3000);
+  }, sseCovered() ? 15000 : 3000);
 }
 
-refresh();
-initSSE();
+// Live updates are an optimisation; the poll is the guarantee. Boot has to reach
+// schedulePoll() no matter what the first two lines hit, or the board would sit
+// there stale forever with no fallback.
+refresh().catch(() => { /* the poll below retries */ });
+try { initSSE(); } catch (_) { /* no live stream in this environment; poll on */ }
 schedulePoll();
