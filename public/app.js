@@ -1078,13 +1078,20 @@ function onBoardChanged() {
   }, 300);
 }
 
+// postMessage throws on a closed channel. Live updates are best-effort — the
+// poll below is the safety net — so a dead channel must never raise past here.
+function channelPost(msg) {
+  if (!sseChannel) return;
+  try { sseChannel.postMessage(msg); } catch (_) { /* polling still covers us */ }
+}
+
 function openStream() {
   const es = new EventSource('/api/events');
   es.addEventListener('changed', () => {
     onBoardChanged();
     // BroadcastChannel never echoes to the sender, so the leader refreshes
     // itself above and notifies everyone else here.
-    if (sseChannel) sseChannel.postMessage({ type: 'changed' });
+    channelPost({ type: 'changed' });
   });
   es.onopen = () => { sseHealthy = true; };
   es.onerror = () => { sseHealthy = false; }; // EventSource auto-reconnects
@@ -1102,7 +1109,17 @@ function initSSE() {
     return;
   }
 
-  sseChannel = new BroadcastChannel(SSE_CHANNEL);
+  // Constructing the channel can throw even where the class exists — restricted
+  // or partitioned storage contexts reject it. Falling back to a private stream
+  // keeps this tab live rather than losing updates over an environment quirk.
+  try {
+    sseChannel = new BroadcastChannel(SSE_CHANNEL);
+  } catch (_) {
+    sseChannel = null;
+    openStream();
+    return;
+  }
+
   sseChannel.onmessage = (e) => {
     const msg = e.data || {};
     if (msg.type === 'changed') {
@@ -1119,15 +1136,22 @@ function initSSE() {
   lastLeaderBeat = Date.now();
   sseHealthy = true;
 
-  // The promise deliberately never settles: the lock is held for the life of
-  // the tab and released only when the tab goes away.
+  // The callback's promise deliberately never settles: the lock is held for the
+  // life of the tab and released only when the tab goes away. The request itself
+  // can still reject, though, and an unhandled rejection would leave this tab
+  // with no stream while its optimistic sseHealthy hid the gap for a further
+  // LEADER_STALE_MS — so fall back to a private stream instead.
   navigator.locks.request(SSE_LOCK, () => new Promise(() => {
     isLeader = true;
     openStream();
     setInterval(() => {
-      sseChannel.postMessage({ type: 'beat', healthy: sseHealthy });
+      channelPost({ type: 'beat', healthy: sseHealthy });
     }, LEADER_BEAT_MS);
-  }));
+  })).catch(() => {
+    if (isLeader) return; // already promoted; the stream above is running
+    sseHealthy = false;   // don't advertise coverage this tab doesn't have
+    openStream();
+  });
 }
 
 // The leader answers for its own stream; a follower is only covered while the
@@ -1146,6 +1170,9 @@ function schedulePoll() {
   }, sseCovered() ? 15000 : 3000);
 }
 
-refresh();
-initSSE();
+// Live updates are an optimisation; the poll is the guarantee. Boot has to reach
+// schedulePoll() no matter what the first two lines hit, or the board would sit
+// there stale forever with no fallback.
+refresh().catch(() => { /* the poll below retries */ });
+try { initSSE(); } catch (_) { /* no live stream in this environment; poll on */ }
 schedulePoll();
