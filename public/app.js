@@ -240,6 +240,178 @@ async function refreshArchive() {
 
 function badge(cls, children) { return el('span', { class: 'badge ' + cls }, children); }
 
+// ---------- working-directory menu (the 📁 badge) ----------
+
+// A local path as a vscode:// URI, e.g. "vscode://file/C:/wamp64/www/project".
+// Custom schemes are one of the few ways a page can reach the desktop: browsers
+// block file:// navigation from an http:// origin, but hand a registered scheme
+// straight to the OS. encodeURI keeps the drive colon and slashes and escapes
+// spaces; '#' and '?' would still read as URI syntax, so they go by hand.
+function vscodeFolderUri(p) {
+  const posix = String(p).replace(/\\/g, '/');
+  return 'vscode://file/' + encodeURI(posix).replace(/#/g, '%23').replace(/\?/g, '%3F');
+}
+
+// Only one menu at a time, on document.body so the 3s board re-render (which
+// rebuilds every card node) can't yank it out from under the pointer.
+let activePathMenu = null;
+
+function closePathMenu() {
+  if (!activePathMenu) return;
+  const m = activePathMenu;
+  activePathMenu = null;
+  document.removeEventListener('mousedown', m.onDocDown, true);
+  document.removeEventListener('keydown', m.onKey, true);
+  window.removeEventListener('resize', closePathMenu);
+  window.removeEventListener('scroll', closePathMenu, true);
+  if (m.node.parentNode) m.node.parentNode.removeChild(m.node);
+  if (m.anchor) m.anchor.setAttribute('aria-expanded', 'false');
+}
+
+// Park the menu under its badge (above it when that would run off the bottom),
+// clamped to the viewport. Called on open and again on any scroll or resize, so
+// the menu tracks the badge instead of being dismissed by every scroll — the
+// board scrolls horizontally, and columns scroll vertically.
+function placePathMenu() {
+  if (!activePathMenu) return;
+  const node = activePathMenu.node;
+  const r = activePathMenu.anchor.getBoundingClientRect();
+  // clientWidth/Height, not innerWidth/Height: the latter counts the scrollbars,
+  // and clamping to them lets the menu tuck under one.
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  // Anchor scrolled out of the viewport: the menu has nothing left to point at.
+  if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) {
+    closePathMenu();
+    return;
+  }
+  const box = node.getBoundingClientRect();
+  const gap = 6;
+  const below = r.bottom + gap;
+  const top = below + box.height > vh - 8 ? Math.max(8, r.top - gap - box.height) : below;
+  node.style.left = Math.max(8, Math.min(r.left, vw - box.width - 8)) + 'px';
+  node.style.top = top + 'px';
+}
+
+function showPathMenu(card, anchor) {
+  // Second click on the same badge closes rather than reopens.
+  const reclick = activePathMenu && activePathMenu.cardId === card.id;
+  closePathMenu();
+  if (reclick) return;
+
+  const status = el('div', { class: 'pm-status' }, []);
+  const flash = (msg, bad) => {
+    status.textContent = msg;
+    status.className = 'pm-status' + (bad ? ' bad' : '');
+  };
+
+  const openBtn = el('button', { class: 'pm-item', type: 'button', role: 'menuitem', tabindex: '-1' }, ['📂 Open in Explorer']);
+  openBtn.addEventListener('click', async () => {
+    flash('Opening…');
+    const r = await api('POST', '/api/cards/' + encodeURIComponent(card.id) + '/open-folder');
+    if (r.ok && r.json && r.json.ok) { closePathMenu(); return; }
+    flash((r.json && r.json.error) || 'Could not open the folder', true);
+  });
+
+  const codeLink = el('a', {
+    class: 'pm-item',
+    href: vscodeFolderUri(card.project),
+    role: 'menuitem',
+    tabindex: '-1',
+    title: 'Opens the folder in VS Code (the browser may ask to allow the vscode: link)',
+  }, ['🧩 Open in VS Code']);
+  codeLink.addEventListener('click', () => closePathMenu());
+
+  const copyBtn = el('button', { class: 'pm-item', type: 'button', role: 'menuitem', tabindex: '-1' }, ['📋 Copy path']);
+  copyBtn.addEventListener('click', async () => {
+    const ok = await copyText(card.project);
+    if (ok) { closePathMenu(); return; }
+    flash('Copy failed', true);
+  });
+
+  const menu = el('div', { class: 'path-menu', role: 'menu', 'aria-label': 'Folder actions for ' + card.project }, [
+    el('div', { class: 'pm-path', text: card.project }, []),
+    openBtn,
+    codeLink,
+    copyBtn,
+    status,
+  ]);
+  // Off-screen first so the height is measurable before placing it.
+  menu.style.left = '-9999px';
+  menu.style.top = '0px';
+  document.body.appendChild(menu);
+
+  // Capture-phase so the card's own drag/click handlers never see these.
+  const onDocDown = (e) => {
+    if (menu.contains(e.target)) return;
+    if (activePathMenu && activePathMenu.anchor === e.target) return; // the badge itself toggles
+    closePathMenu();
+  };
+  // role="menu" promises arrow-key navigation, so provide it: the items are
+  // tabindex="-1" and focus roves between them. Tab leaves the menu entirely,
+  // which for a 3-item popup is the least surprising thing.
+  const items = [openBtn, codeLink, copyBtn];
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      // Read the anchor through activePathMenu: a board re-render swaps in a
+      // fresh badge node while the menu is open, and projectBadge() re-points
+      // it there.
+      const live = activePathMenu && activePathMenu.anchor;
+      closePathMenu();
+      if (live && live.isConnected) live.focus();
+      return;
+    }
+    if (e.key === 'Tab') { closePathMenu(); return; }
+    const nav = { ArrowDown: 1, ArrowUp: -1, Home: 'first', End: 'last' }[e.key];
+    if (!nav) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement);
+    const next = nav === 'first' ? 0
+      : nav === 'last' ? items.length - 1
+      : (at + nav + items.length) % items.length;
+    items[next].focus();
+  };
+  document.addEventListener('mousedown', onDocDown, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', placePathMenu);
+  window.addEventListener('scroll', placePathMenu, true);
+
+  activePathMenu = { cardId: card.id, node: menu, anchor, onDocDown, onKey };
+  anchor.setAttribute('aria-expanded', 'true');
+  placePathMenu();
+  // preventScroll matters: a badge near a column edge would otherwise be
+  // scrolled into view by the focus, moving the menu off its anchor.
+  openBtn.focus({ preventScroll: true });
+}
+
+// The 📁 badge: the friendly label collapsed, the full working directory in the
+// tooltip, and a click-through to the folder actions.
+function projectBadge(card) {
+  const label = '📁 ' + (card.projectLabel || '(unknown)');
+  if (!card.project) {
+    return badge('project', [label]);
+  }
+  const btn = el('button', {
+    class: 'badge project path-btn',
+    type: 'button',
+    draggable: 'false',
+    title: card.project + '\n(click for folder actions)',
+    'aria-haspopup': 'true',
+    'aria-expanded': 'false',
+  }, [label, el('span', { class: 'pm-caret', text: '▾' }, [])]);
+  // Don't let a press on the badge start a card drag.
+  btn.addEventListener('mousedown', (e) => e.stopPropagation());
+  btn.addEventListener('click', (e) => { e.stopPropagation(); showPathMenu(card, btn); });
+  // The board re-renders every few seconds, replacing this node. If this card's
+  // menu is open, adopt the fresh badge as its anchor so the open highlight and
+  // the Escape focus target follow the live element rather than a detached one.
+  if (activePathMenu && activePathMenu.cardId === card.id) {
+    btn.setAttribute('aria-expanded', 'true');
+    activePathMenu.anchor = btn;
+  }
+  return btn;
+}
+
 // Format one history entry, tolerating the old {from,to,auto} shape as well as
 // the current {kind,text,auto} shape.
 function historyText(h) {
@@ -499,9 +671,7 @@ function cardNode(card, inArchive) {
   node.appendChild(head);
 
   const badges = el('div', { class: 'badges' }, []);
-  const proj = badge('project', ['📁 ' + (card.projectLabel || '(unknown)')]);
-  if (card.project) proj.setAttribute('title', card.project);
-  badges.appendChild(proj);
+  badges.appendChild(projectBadge(card));
   if (card.repoUrl) {
     badges.appendChild(el('a', {
       class: 'badge repo',
@@ -693,6 +863,13 @@ function render() {
   board.appendChild(el('div', { class: 'add-col-tile', onclick: addColumn, title: 'Add a column' }, ['＋ Add column']));
 
   restoreNoteFocus(keepNoteFocus);
+
+  // An open folder menu outlives the rebuild (it hangs off document.body), but
+  // its card may have moved column or row — re-park it on the fresh badge.
+  if (activePathMenu) {
+    if (activePathMenu.anchor.isConnected) placePathMenu();
+    else closePathMenu(); // the card left the board entirely
+  }
 }
 
 // ---------- card actions ----------
