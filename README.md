@@ -166,6 +166,28 @@ Expanded cards link to the artifacts behind the session: **📄 Plan** opens the
 plan file Claude Code wrote for that session (`~/.claude/plans/<slug>*.md`) in a
 modal, and the transcript path is shown with a **📋** copy button.
 
+## The 📁 badge: session folder actions
+
+The badge shows the friendly project label, with the session's **full working
+directory** in its tooltip. Clicking it opens a small menu with the path in full
+plus three actions:
+
+- **📂 Open in Explorer** — `POST /api/cards/:id/open-folder`. The server (same
+  machine) shells out to `explorer.exe` (`open` on macOS, `xdg-open` on Linux).
+  A browser cannot navigate from an `http://` page to a `file://` URL, so this
+  round trip is the only reliable way to open the real folder window.
+- **🧩 Open in VS Code** — a plain `vscode://file/…?windowId=_blank` link. Custom
+  schemes *are* handed to the OS from a web page, so this needs no server call.
+  `windowId=_blank` is what forces a **new** window; without it VS Code's
+  protocol handler reuses the last active one and replaces what you were looking
+  at.
+- **📋 Copy path** — the working directory to the clipboard.
+
+The open-folder endpoint launches a process, so it is gated more tightly than
+the data endpoints: the path comes only from the card record (never from the
+request body), the `Origin` must be this dashboard's own loopback origin, and the
+`Host` must be loopback. It can only ever open a folder already on the board.
+
 ## Data & files
 
 ```

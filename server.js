@@ -6,6 +6,7 @@
 // owns data/board.json, so concurrent writes from many sessions are serialized.
 
 const http = require('http');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -58,6 +59,50 @@ function readBody(req) {
       try { resolve(JSON.parse(data)); } catch (_) { resolve({}); }
     });
     req.on('error', () => resolve({}));
+  });
+}
+
+// Every other endpoint only reads or mutates board data; open-folder launches a
+// process, so it gets a stricter gate. A page on another origin can still POST
+// here (the API has no auth), but the browser stamps its own Origin on that
+// request, and only our own origins are accepted.
+function isTrustedOrigin(req) {
+  const origin = req.headers.origin;
+  if (origin === undefined) return true; // non-browser caller (CLI/curl); host check below still applies
+  const port = config.resolvePort();
+  return origin === 'http://127.0.0.1:' + port || origin === 'http://localhost:' + port;
+}
+
+function isLoopbackHost(req) {
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+// Reveal a directory in the OS file manager. The path always comes from a card
+// record — never from the request body — so there is nothing to sanitize beyond
+// confirming the directory still exists. execFile with an argv array means no
+// shell, so spaces and metacharacters in the path are inert.
+function openFolder(res, dir) {
+  if (!dir) return sendJson(res, 400, { error: 'no working directory recorded for this session' });
+  const target = path.resolve(dir);
+  fs.stat(target, (err, stats) => {
+    if (err) return sendJson(res, 404, { error: 'folder no longer exists', path: target });
+    if (!stats.isDirectory()) return sendJson(res, 400, { error: 'not a folder', path: target });
+
+    const cmd = process.platform === 'win32' ? 'explorer.exe'
+      : process.platform === 'darwin' ? 'open' : 'xdg-open';
+    execFile(cmd, [target], (spawnErr) => {
+      if (spawnErr) {
+        // explorer.exe exits 1 even when it opened the window, so on Windows a
+        // non-zero exit says nothing and only a spawn failure counts. open and
+        // xdg-open do report failure in their exit code, so there any error is
+        // one — reporting success while nothing opened is worse than a message.
+        if (process.platform !== 'win32' || spawnErr.code === 'ENOENT') {
+          return sendJson(res, 500, { error: 'could not open the folder: ' + spawnErr.message });
+        }
+      }
+      sendJson(res, 200, { ok: true, path: target });
+    });
   });
 }
 
@@ -218,6 +263,14 @@ async function handleApi(req, res, pathname, query) {
       const card = store.updateCard(id, body);
       if (!card) return sendJson(res, 404, { error: 'card not found' });
       return sendJson(res, 200, { card });
+    }
+    if (method === 'POST' && action === 'open-folder') {
+      if (!isTrustedOrigin(req) || !isLoopbackHost(req)) {
+        return sendJson(res, 403, { error: 'forbidden' });
+      }
+      const card = store.getCardAnywhere(id);
+      if (!card) return sendJson(res, 404, { error: 'card not found' });
+      return openFolder(res, card.project);
     }
     if (method === 'POST' && action === 'move') {
       const body = await readBody(req);
