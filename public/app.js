@@ -267,8 +267,8 @@ function closePathMenu() {
   activePathMenu = null;
   document.removeEventListener('mousedown', m.onDocDown, true);
   document.removeEventListener('keydown', m.onKey, true);
-  window.removeEventListener('resize', closePathMenu);
-  window.removeEventListener('scroll', closePathMenu, true);
+  window.removeEventListener('resize', placePathMenu);
+  window.removeEventListener('scroll', placePathMenu, true);
   if (m.node.parentNode) m.node.parentNode.removeChild(m.node);
   if (m.anchor) m.anchor.setAttribute('aria-expanded', 'false');
 }
@@ -349,7 +349,10 @@ function showPathMenu(card, anchor) {
   // Capture-phase so the card's own drag/click handlers never see these.
   const onDocDown = (e) => {
     if (menu.contains(e.target)) return;
-    if (activePathMenu && activePathMenu.anchor === e.target) return; // the badge itself toggles
+    // contains(), not ===: the badge holds a caret span, and a press on that
+    // glyph must still count as pressing the badge or the click that follows
+    // would reopen the menu this mousedown just closed.
+    if (activePathMenu && activePathMenu.anchor.contains(e.target)) return;
     closePathMenu();
   };
   // role="menu" promises arrow-key navigation, so provide it: the items are

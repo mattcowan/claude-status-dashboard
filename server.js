@@ -92,10 +92,14 @@ function openFolder(res, dir) {
     const cmd = process.platform === 'win32' ? 'explorer.exe'
       : process.platform === 'darwin' ? 'open' : 'xdg-open';
     execFile(cmd, [target], (spawnErr) => {
-      // explorer.exe exits 1 even when it opened the window, so a non-zero exit
-      // is not a failure signal here; only a spawn failure (ENOENT) is.
-      if (spawnErr && spawnErr.code === 'ENOENT') {
-        return sendJson(res, 500, { error: 'could not launch ' + cmd });
+      if (spawnErr) {
+        // explorer.exe exits 1 even when it opened the window, so on Windows a
+        // non-zero exit says nothing and only a spawn failure counts. open and
+        // xdg-open do report failure in their exit code, so there any error is
+        // one — reporting success while nothing opened is worse than a message.
+        if (process.platform !== 'win32' || spawnErr.code === 'ENOENT') {
+          return sendJson(res, 500, { error: 'could not open the folder: ' + spawnErr.message });
+        }
       }
       sendJson(res, 200, { ok: true, path: target });
     });
