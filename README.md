@@ -166,8 +166,11 @@ plus three actions:
   machine) shells out to `explorer.exe` (`open` on macOS, `xdg-open` on Linux).
   A browser cannot navigate from an `http://` page to a `file://` URL, so this
   round trip is the only reliable way to open the real folder window.
-- **🧩 Open in VS Code** — a plain `vscode://file/…` link. Custom schemes *are*
-  handed to the OS from a web page, so this needs no server call.
+- **🧩 Open in VS Code** — a plain `vscode://file/…?windowId=_blank` link. Custom
+  schemes *are* handed to the OS from a web page, so this needs no server call.
+  `windowId=_blank` is what forces a **new** window; without it VS Code's
+  protocol handler reuses the last active one and replaces what you were looking
+  at.
 - **📋 Copy path** — the working directory to the clipboard.
 
 The open-folder endpoint launches a process, so it is gated more tightly than

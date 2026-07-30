@@ -247,9 +247,14 @@ function badge(cls, children) { return el('span', { class: 'badge ' + cls }, chi
 // block file:// navigation from an http:// origin, but hand a registered scheme
 // straight to the OS. encodeURI keeps the drive colon and slashes and escapes
 // spaces; '#' and '?' would still read as URI syntax, so they go by hand.
+//
+// windowId=_blank forces a NEW window: without it VS Code's protocol handler
+// reuses the last active window, so opening one session's folder would replace
+// whatever you were looking at. VS Code strips the parameter before opening.
 function vscodeFolderUri(p) {
   const posix = String(p).replace(/\\/g, '/');
-  return 'vscode://file/' + encodeURI(posix).replace(/#/g, '%23').replace(/\?/g, '%3F');
+  const encoded = encodeURI(posix).replace(/#/g, '%23').replace(/\?/g, '%3F');
+  return 'vscode://file/' + encoded + '?windowId=_blank';
 }
 
 // Only one menu at a time, on document.body so the 3s board re-render (which
@@ -318,7 +323,7 @@ function showPathMenu(card, anchor) {
     href: vscodeFolderUri(card.project),
     role: 'menuitem',
     tabindex: '-1',
-    title: 'Opens the folder in VS Code (the browser may ask to allow the vscode: link)',
+    title: 'Opens the folder in a new VS Code window (the browser may ask to allow the vscode: link)',
   }, ['🧩 Open in VS Code']);
   codeLink.addEventListener('click', () => closePathMenu());
 
