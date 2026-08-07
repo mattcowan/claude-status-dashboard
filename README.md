@@ -119,10 +119,22 @@ write a JSON array of command names (leading slash optional) to
 A missing or malformed file falls back to the default rather than silently
 skipping everything (or nothing).
 
-**What counts as a match.** Either the raw typed form on a **single line**
-(`/git-commit-message`, `/git-commit-message --no-cosign`) or the expanded
-`<command-name>/git-commit-message</command-name>` form. A prompt that runs onto
-a second line is treated as real work even if it opens with a slash command.
+**What counts as a match.** The prompt must be the invocation and *nothing more* —
+either the raw typed form on a **single line** (`/git-commit-message`,
+`/git-commit-message --no-cosign`), or the expanded form Claude Code stores in
+transcripts, where **every** line is a `<command-name>` / `<command-message>` /
+`<command-args>` wrapper:
+
+```
+<command-message>git-commit-message</command-message>
+<command-name>/git-commit-message</command-name>
+```
+
+Prose anywhere in the prompt means real work, even if a slash command appears in
+it — a prompt that merely *quotes* `<command-name>/git-commit-message</command-name>`
+(a code review of this very file, say) still gets a card. Anything the matcher
+doesn't recognize — an unclosed tag, a wrapper Claude Code adds in future — also
+falls through to "real work", which is the safe direction to fail.
 
 ### The `⤴ started late` badge
 
