@@ -83,7 +83,7 @@ All four call this one script in **exec form** (the hook JSON arrives on stdin):
 
 | Event | Subcommand |
 |---|---|
-| `UserPromptSubmit` (appended after the existing hooks) | `hook-user-prompt` — creates the card on the first prompt |
+| `UserPromptSubmit` (appended after the existing hooks) | `hook-user-prompt` — creates the card on the first prompt that isn't skip-listed |
 | `Stop` (appended after the existing hook) | `hook-stop` |
 | `PostToolUse` matcher `Edit\|Write` | `hook-post-edit` |
 | `SessionEnd` (appended after the existing hook) | `hook-session-end` |
@@ -91,6 +91,60 @@ All four call this one script in **exec form** (the hook JSON arrives on stdin):
 (Card creation is on `UserPromptSubmit` rather than `SessionStart` on purpose:
 `SessionStart` fires when a chat *opens*, which produced empty tickets for
 sessions you never used.)
+
+## Skipped prompts (commands that don't earn a card)
+
+Some slash commands are bookkeeping, not work. `/git-commit-message` is the
+motivating case: it's run inside an already-open, higher-tier session precisely
+to avoid switching models just to draft a commit message. A session that only
+ever does that isn't a task, so it shouldn't appear on the board at all.
+
+`hook-user-prompt` checks the prompt against a **skip list** ([`lib/skip-prompts.js`](lib/skip-prompts.js))
+*before* it contacts or spawns the server, so a skipped prompt costs one small
+file read and a session that only runs skipped commands never even starts the
+dashboard.
+
+Suppressing creation at this one point is sufficient, because every other hook
+path — the Stop backstop, model/meta recording, external-edit tracking,
+session-end — no-ops when the card is absent rather than creating one.
+
+**Configuring the list.** The default is `["git-commit-message"]`. To change it,
+write a JSON array of command names (leading slash optional) to
+`data/skip-prompts.json`:
+
+```json
+["git-commit-message", "insights"]
+```
+
+A missing or malformed file falls back to the default rather than silently
+skipping everything (or nothing).
+
+**What counts as a match.** Either the raw typed form on a **single line**
+(`/git-commit-message`, `/git-commit-message --no-cosign`) or the expanded
+`<command-name>/git-commit-message</command-name>` form. A prompt that runs onto
+a second line is treated as real work even if it opens with a slash command.
+
+### The `⤴ started late` badge
+
+Skipping is per-*prompt*, not per-session, so a session can start with
+`/git-commit-message` and then be given real work — usually by accident, since
+the point of running it there was to *not* spend that model on the session. When
+that happens, the card is created on the first real prompt and flagged:
+
+- a purple **`⤴ started late`** badge on the card (hover for the count, which
+  commands, and when the session actually began), and
+- a history entry: *"Card created late — 2 earlier turns skipped
+  (/git-commit-message)"*.
+
+Without the flag, `createdAt` would quietly understate the session's real age.
+
+Mechanically: each skipped prompt writes a small marker under
+`data/skipped-sessions/<session-id>.json` (one file per session, so concurrent
+sessions can't race); the first non-skipped prompt consumes it and passes the
+count along on the card-creation POST. Markers for sessions that never came back
+are swept after 7 days. The flag is only applied when that POST is what *creates*
+the card — running `/git-commit-message` midway through an established session is
+routine and gets no badge.
 
 ## The `/post-status` command
 

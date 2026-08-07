@@ -25,6 +25,7 @@ const { spawn } = require('child_process');
 const config = require('../lib/config');
 const { normalizePath } = require('../lib/store');
 const transcript = require('../lib/transcript');
+const skipPrompts = require('../lib/skip-prompts');
 
 // ---------- tiny HTTP client ----------
 
@@ -171,9 +172,22 @@ function isUnder(child, parent) {
 // ticket. Idempotent: after the first prompt it just refreshes the card.
 async function hookUserPrompt() {
   const input = await readHookInput();
-  await ensureServer();
   const session = input.session_id;
   const cwd = input.cwd || process.cwd();
+
+  // Bookkeeping commands (/git-commit-message and anything else on the skip
+  // list) don't earn a card. Checked BEFORE ensureServer() so a session that
+  // only ever runs one never even starts the dashboard.
+  //
+  // This also skips the refresh POST for sessions that already HAVE a card,
+  // which is harmless: the Stop hook bumps their activity clock a moment later.
+  const skipped = skipPrompts.match(input.prompt);
+  if (skipped) {
+    if (session) skipPrompts.record(session, skipped);
+    process.exit(0);
+  }
+
+  await ensureServer();
   if (session) {
     // Best-effort model read (may be empty on a session's very first prompt,
     // before any assistant line exists — hook-stop backfills it).
@@ -186,6 +200,10 @@ async function hookUserPrompt() {
       session, project: cwd, source: 'prompt', model,
       aiTitle: meta.aiTitle, slug: meta.slug, gitBranch: meta.gitBranch,
       transcriptPath: input.transcript_path || '',
+      // Non-null only when earlier turns in this session were skipped. The
+      // server ignores it unless this POST is the one that mints the card, so
+      // a mid-session /git-commit-message never flags an established card.
+      skippedBefore: skipPrompts.takeRecord(session),
     });
   }
   process.exit(0);

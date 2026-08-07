@@ -156,8 +156,13 @@ async function handleApi(req, res, pathname, query) {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
     const repoUrl = body.project ? repo.webUrl(body.project) : null;
+    // Read before the upsert: skippedBefore only means something on the POST
+    // that actually mints the card. On an existing card it would be reporting a
+    // mid-session /git-commit-message, which is routine and not worth flagging.
+    const isNew = !store.getCard(body.session);
     const card = store.upsertSession(body.session, body.project, body.source, repoUrl, body.model);
     store.setSessionMeta(body.session, body);
+    if (isNew && body.skippedBefore) store.noteSkippedBefore(body.session, body.skippedBefore);
     usage.maybeRefresh();
     return sendJson(res, 200, { card });
   }
