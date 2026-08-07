@@ -697,6 +697,20 @@ function cardNode(card, inArchive) {
   }
   if (card.model) badges.appendChild(badge('model', [prettyModel(card.model)]));
   if (card.autoMoved || (card.leftOff && card.leftOff.auto)) badges.appendChild(badge('auto', ['⚙ auto-captured']));
+  // This session ran bookkeeping commands (/git-commit-message) before its
+  // first real prompt, so it was deliberately kept off the board until now —
+  // say so, otherwise "started 2m ago" quietly misstates the session's age.
+  if (card.skippedBefore) {
+    const n = card.skippedBefore.count || 1;
+    const cmds = (card.skippedBefore.commands || []).map((c) => '/' + c).join(', ');
+    const b = badge('skipped', ['⤴ started late']);
+    b.setAttribute('title',
+      n + (n === 1 ? ' earlier turn' : ' earlier turns') + ' in this session ' +
+      (n === 1 ? 'was' : 'were') + ' skipped' + (cmds ? ' (' + cmds + ')' : '') +
+      ' — the card was created on the first real prompt' +
+      (card.skippedBefore.firstAt ? ', session began ' + relTime(card.skippedBefore.firstAt) : ''));
+    badges.appendChild(b);
+  }
   const stale = !inArchive && isStale(card);
   if (stale) {
     const b = badge('stale', ['💤 ' + relTime(card.lastActiveAt)]);

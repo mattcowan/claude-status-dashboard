@@ -10,6 +10,7 @@
   --accent-plain: #4c8dff;  /* accent used as text/decoration on dark bg */
   --danger-text: #ff9b9b;   /* external-edit label on dark tint */
   --warn-text: #f0b64a;     /* auto / left-off labels on dark tint */
+  --flag-text: #c08bff;     /* "started late" label — distinct from warn */
 
   --working: #4c8dff;
   --needs: #f5a623;
@@ -32,6 +33,7 @@
     --accent-plain: #2f6fd6;  /* accent-as-text must be dark enough on light bg */
     --danger-text: #c0392b;   /* external-edit label on light tint */
     --warn-text: #8a5a00;     /* auto / left-off labels on light tint */
+    --flag-text: #6b3fa0;     /* "started late" label — darkened for light bg */
     --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px rgba(20,30,50,.08);
   }
 }
@@ -383,6 +385,8 @@ a.badge.repo {
 a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-2); }
 .badge.model { color: var(--accent-plain); border-color: rgba(76,141,255,.35); background: rgba(76,141,255,.10); }
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
+/* Session was kept off the board for its first turns (skip-listed commands) */
+.badge.skipped { color: var(--flag-text); border-color: rgba(160,107,255,.4); background: rgba(160,107,255,.12); }
 .badge.branch { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 a.badge.branch { color: var(--accent-plain); text-decoration: none; }
 a.badge.branch:hover { border-color: var(--accent-plain); background: var(--panel-2); }
