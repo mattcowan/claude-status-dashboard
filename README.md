@@ -48,8 +48,6 @@ card because Claude didn't declare an outcome — as opposed to a deliberate
 
 ---
 
----
-
 ## Setup
 
 Requires **Node 18+**. There is nothing to install — no dependencies, no build
