@@ -10,5 +10,16 @@ node_modules/
 .playwright-mcp/
 playwright-profile/
 
-# Ad-hoc screenshots
+# Local Claude Code settings — may contain session ids and absolute paths.
+# (Also covered by many users' global ignore; pinned here so this repo does not
+# depend on a machine-level config for that.)
+.claude/settings.local.json
+
+# Ad-hoc screenshots — these capture the live board, which shows real project
+# names and session text. Only the curated ones under docs/ are committed.
 *.png
+*.jpg
+*.jpeg
+!docs/*.png
+!docs/*.jpg
+!docs/*.jpeg

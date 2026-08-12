@@ -242,7 +242,7 @@ function badge(cls, children) { return el('span', { class: 'badge ' + cls }, chi
 
 // ---------- working-directory menu (the 📁 badge) ----------
 
-// A local path as a vscode:// URI, e.g. "vscode://file/C:/wamp64/www/project".
+// A local path as a vscode:// URI, e.g. "vscode://file/C:/Sites/my-project".
 // Custom schemes are one of the few ways a page can reach the desktop: browsers
 // block file:// navigation from an http:// origin, but hand a registered scheme
 // straight to the OS. encodeURI keeps the drive colon and slashes and escapes

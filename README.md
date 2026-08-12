@@ -6,15 +6,17 @@ at a glance which are working, which need you, and which are ready for review.
 
 Open it at **http://127.0.0.1:4787**.
 
-```
-┌── Working ──────┐  ┌── Needs Input ──┐  ┌ Ready for Review ┐   (Done: hidden,
-│  live sessions  │  │  waiting on you │  │  ready to review │    toggle to show)
-└─────────────────┘  └─────────────────┘  └──────────────────┘
-```
+![Screenshot of the dashboard: four Kanban columns of Claude session cards, beneath a row of usage meters.](docs/screenshot.jpg)
 
 One **card per Claude session**, keyed by its session id and tagged with the
 project folder it ran in. Cards move through columns automatically as sessions
 work and stop; **you** decide when something is truly *Done*.
+
+Reading the shot above: **Working / Needs Input / Ready for Review** are the
+three fixed columns Claude itself moves cards between, **Merging** is a custom
+one managed by hand, and **Done** is hidden behind a toggle. Each card carries
+its project folder, git remote and branch, the model that did the work, and a
+**⚙ auto-captured** badge where Claude stopped without declaring an outcome.
 
 ---
 
@@ -46,6 +48,70 @@ card because Claude didn't declare an outcome — as opposed to a deliberate
 
 ---
 
+---
+
+## Setup
+
+Requires **Node 18+**. There is nothing to install — no dependencies, no build
+step. Setup is three files you copy, and it matters that you do **all three**:
+the hooks put cards on the board, and the `CLAUDE.md` block is what makes those
+cards say anything.
+
+```sh
+git clone https://github.com/mattcowan/claude-status-dashboard.git
+cd claude-status-dashboard
+node bin/status.js ensure-server     # verify it starts, then open the URL it prints
+```
+
+Everywhere below, `<DASHBOARD_PATH>` is the absolute path to that clone.
+
+### 1. Wire up the hooks *(creates and moves cards)*
+
+Merge the four entries from [`examples/settings.hooks.json`](examples/settings.hooks.json)
+into the `hooks` object of your `~/.claude/settings.json`, substituting
+`<DASHBOARD_PATH>`.
+
+> **Merge, don't replace.** Each event holds an *array* of hook groups and Claude
+> Code runs all of them. If you already have a `Stop` or `UserPromptSubmit` hook,
+> append to that array — pasting over it silently disables what you had.
+
+Restart Claude Code, send a prompt in any project, and a card should appear.
+If nothing shows up, see [Troubleshooting](#troubleshooting).
+
+### 2. Add the `CLAUDE.md` block *(makes cards meaningful)*
+
+Paste the block from [`examples/CLAUDE.md-snippet.md`](examples/CLAUDE.md-snippet.md)
+into `~/.claude/CLAUDE.md` (every project) or a single project's `CLAUDE.md`.
+
+**This step is not optional decoration.** Hooks can create a card, move it
+between columns, and scrape a fallback summary from the transcript — but nothing
+in a hook can know that Claude is "tracking down a rounding bug in the checkout
+tax". Only Claude can say that, and it only says it because this block asks it
+to. Skip this step and every card lands as an italic auto-title stamped
+**⚙ auto-captured**, which is the board telling you the truth: nobody declared
+anything.
+
+It's worth reading as the design point of the project — the prompt is a
+configuration file, sitting alongside the hooks rather than beneath them.
+
+### 3. Install `/post-status` *(optional)*
+
+Copy [`examples/commands/post-status.md`](examples/commands/post-status.md) to
+`~/.claude/commands/post-status.md` and substitute `<DASHBOARD_PATH>`. Then
+`/post-status` in any session posts an on-demand snapshot — useful for sessions
+that were already open before you installed the hooks.
+
+### Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| No cards appear at all | Hooks not firing. Most often `node` isn't on the PATH that Claude Code hands hooks — replace `"command": "node"` with an absolute binary path (e.g. `C:/Program Files/nodejs/node.exe`, or the output of `which node`). |
+| Cards appear but are all italic and **⚙ auto-captured** | Step 2 is missing. The hooks are working; Claude hasn't been told to write a status. |
+| Cards appear for some projects only | A project-level `CLAUDE.md` is in play instead of the global one. |
+| Port 4787 already in use | Another instance owns it (harmless — the server exits quietly). Change it with the `PORT` env var or by writing a number into `data/server.port`. |
+
+---
+
 ## Running it manually
 
 ```sh
@@ -74,11 +140,13 @@ predates the hooks), the CLI creates one.
 
 ## Hooks (installed in `~/.claude/settings.json`)
 
+Copy-paste config: [`examples/settings.hooks.json`](examples/settings.hooks.json).
+
 All four call this one script in **exec form** (the hook JSON arrives on stdin):
 
 ```jsonc
 { "type": "command", "command": "node",
-  "args": ["C:\\wamp64\\www\\claude-status-dashboard\\bin\\status.js", "<subcmd>"] }
+  "args": ["<DASHBOARD_PATH>/bin/status.js", "<subcmd>"] }
 ```
 
 | Event | Subcommand |
@@ -163,7 +231,8 @@ routine and gets no badge.
 Run **`/post-status`** inside any Claude session to make it post its current
 status to the board on demand (handy for sessions that were already running
 before the hooks existed, or any time you want an up-to-the-moment snapshot).
-It's a custom slash command at `~/.claude/commands/post-status.md`; the session
+It's a custom slash command at `~/.claude/commands/post-status.md` — ship it from
+[`examples/commands/post-status.md`](examples/commands/post-status.md). The session
 summarizes its work, picks Working / Needs Input / Ready for Review, and posts via
 the CLI. Add a note inline, e.g. `/post-status blocked on the staging DB creds`.
 
@@ -254,6 +323,31 @@ the data endpoints: the path comes only from the card record (never from the
 request body), the `Origin` must be this dashboard's own loopback origin, and the
 `Host` must be loopback. It can only ever open a folder already on the board.
 
+## Platform support
+
+Developed on **Windows 11**; the core board (hooks, CLI, columns, SSE, plans,
+transcripts) is plain Node and platform-neutral. Four things are not fully
+portable yet, all of them non-fatal — each degrades to a message rather than a
+crash. Reports welcome.
+
+- **The usage strip needs a credentials *file*, which macOS may not have.** It
+  reads the OAuth token from `~/.claude/.credentials.json`. That's where Claude
+  Code keeps it on **Windows and Linux**, but on **macOS** it defaults to the
+  system **Keychain** and the file may not exist — in which case the strip just
+  reports a token error. Claude Code does support a file-based fallback in the
+  same JSON format; if you have one, point this at it with the `CLAUDE_CRED_FILE`
+  env var. The rest of the board is unaffected.
+- **`CLAUDE_CONFIG_DIR` is not honored.** Both the credentials lookup above and
+  the **📄 Plan** viewer assume `~/.claude/…`. If you've relocated your Claude
+  Code config, plans won't be found; `CLAUDE_CRED_FILE` covers the credentials
+  half only.
+- **Path comparison is Windows-shaped.** `normalizePath` folds separators to `\`
+  and lowercases, which is right on Windows and harmless on macOS's default
+  case-insensitive volume, but on a **case-sensitive filesystem** two genuinely
+  distinct paths differing only in case would be treated as one project.
+- **Opening a folder** shells out to `explorer.exe` / `open` / `xdg-open`. The
+  first two are verified; `xdg-open` is untested.
+
 ## Data & files
 
 ```
@@ -263,10 +357,13 @@ lib/store.js         in-memory board + atomic debounced save + label logic
 lib/transcript.js    transcript extractors (last message, model, title/slug/branch)
 lib/usage.js         usage-limits fetcher + tolerant normalizer (undocumented API)
 lib/settings.js      server-side settings (data/settings.json)
+lib/skip-prompts.js  the skip list (commands that don't earn a card)
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
+examples/            hook config, CLAUDE.md block, /post-status command (setup)
 data/                board.json, archive.json, settings.json, usage.json,
-                     server.port/pid/log  (runtime)
+                     skip-prompts.json, skipped-sessions/,
+                     server.port/pid/log  (runtime, gitignored)
 ```
 
 - **Active** cards live in `data/board.json`; **archived** (dumped) cards move to
@@ -295,3 +392,21 @@ own columns in between — e.g. a **Merging** column you manage by hand:
   freely (Done stays last).
 - **Deleting a custom column that still holds cards** asks what to do with them:
   move them to another column, or archive them all.
+
+---
+
+## A note on your data
+
+Everything stays on your machine — the board binds to `127.0.0.1` and the only
+outbound request is the usage-limits fetch to Anthropic's own API.
+
+Be aware of what accumulates in `data/`, though: `board.json` and `archive.json`
+hold the headline, description and "where it left off" text for **every session
+across every project**, plus working directories and transcript paths. On
+client work that is very likely confidential. `data/` is gitignored and should
+stay that way — don't commit it, and treat it like a work journal if you back it
+up or sync the folder.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
