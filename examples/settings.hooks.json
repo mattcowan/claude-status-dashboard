@@ -1,0 +1,73 @@
+{
+  "//": [
+    "Hook wiring for the Claude Session Status Dashboard.",
+    "",
+    "Copy the four entries below into the `hooks` object of your",
+    "~/.claude/settings.json, replacing <DASHBOARD_PATH> with the absolute path",
+    "to your clone of this repo.",
+    "",
+    "IMPORTANT — MERGE, DO NOT REPLACE. If you already have hooks on any of",
+    "these events, APPEND this entry to that event's existing array rather than",
+    "overwriting it. Every event below is an array of groups, and Claude Code",
+    "runs all of them.",
+    "",
+    "PATHS: use FORWARD slashes, or escape backslashes as \\\\ (this is JSON).",
+    "",
+    "NODE: if the hooks silently do nothing, replace \"node\" with the absolute",
+    "path to your Node binary (e.g. \"C:/Program Files/nodejs/node.exe\", or the",
+    "output of `which node`). Hooks do not always inherit your shell's PATH.",
+    "",
+    "This key is a comment. It is ignored by Claude Code and can be deleted."
+  ],
+
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-user-prompt"]
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-stop"]
+          }
+        ]
+      }
+    ],
+
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-post-edit"]
+          }
+        ]
+      }
+    ],
+
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-session-end"]
+          }
+        ]
+      }
+    ]
+  }
+}

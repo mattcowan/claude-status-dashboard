@@ -1,9 +1,24 @@
 {
   "name": "claude-status-dashboard",
   "version": "1.0.0",
-  "private": true,
   "description": "Local Kanban dashboard tracking the status of every Claude Code session.",
+  "license": "MIT",
+  "author": "Matthew Neil Cowan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mattcowan/claude-status-dashboard.git"
+  },
+  "keywords": [
+    "claude-code",
+    "kanban",
+    "dashboard",
+    "hooks",
+    "zero-dependency"
+  ],
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "claude-status": "bin/status.js"
   },
