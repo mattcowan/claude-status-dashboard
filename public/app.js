@@ -110,7 +110,7 @@ function isStale(card) {
 // of those, quiet from an hour to over a week, sitting next to four real ones.
 //
 // So the absence of an end signal only means we don't know. A card counts as
-// live while it is still bumping lastActiveAt, and past STALE_MS without an end
+// live while it is still bumping lastActiveAt, and past IDLE_MS without an end
 // signal it reads "idle", which is the honest answer: possibly open and quiet,
 // possibly long gone. Only `ended` is a fact.
 //

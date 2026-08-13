@@ -409,9 +409,11 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }
 .badge.ended .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
-/* Idle: no end signal, but quiet past the stale threshold. Amber rather than
-   green, and deliberately NOT pulsing — the pulse is what reads as "something
-   is happening", which is exactly the claim we can't make here. */
+/* Idle: no end signal, and quiet past IDLE_MS (4 hours) — the liveness
+   threshold, NOT the 10-minute STALE_MS behind the 💤 badge; a card can be 💤
+   stale and still live. Amber rather than green, and deliberately NOT pulsing —
+   the pulse is what reads as "something is happening", which is exactly the
+   claim we can't make here. */
 .badge.idle { color: var(--warn-text); }
 .badge.idle .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-text); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
