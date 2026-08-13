@@ -164,6 +164,8 @@ Some slash commands are bookkeeping, not work. `/git-commit-message` is the
 motivating case: it's run inside an already-open, higher-tier session precisely
 to avoid switching models just to draft a commit message. A session that only
 ever does that isn't a task, so it shouldn't appear on the board at all.
+`/git-review` — a read-only pre-commit gate over changes some other session
+already made — is the same shape, and is skipped for the same reason.
 
 `hook-user-prompt` checks the prompt against a **skip list** ([`lib/skip-prompts.js`](lib/skip-prompts.js))
 *before* it contacts or spawns the server, so a skipped prompt costs one small
@@ -174,16 +176,23 @@ Suppressing creation at this one point is sufficient, because every other hook
 path — the Stop backstop, model/meta recording, external-edit tracking,
 session-end — no-ops when the card is absent rather than creating one.
 
-**Configuring the list.** The default is `["git-commit-message"]`. To change it,
-write a JSON array of command names (leading slash optional) to
-`data/skip-prompts.json`:
+**Configuring the list.** There is one list, in one place. The shipped default
+is `DEFAULT_COMMANDS` at the top of [`lib/skip-prompts.js`](lib/skip-prompts.js)
+— currently `["git-commit-message", "git-review"]`. Add a command there to skip
+it for every install.
+
+To override it on one machine without touching the code, write a JSON array of
+command names (leading slash optional) to `data/skip-prompts.json`:
 
 ```json
-["git-commit-message", "insights"]
+["git-commit-message", "git-review", "insights"]
 ```
 
-A missing or malformed file falls back to the default rather than silently
-skipping everything (or nothing).
+That file **replaces** the default rather than adding to it, so repeat any
+built-ins you still want skipped. It lives under the gitignored `data/`, which
+makes it the right home for commands specific to your own setup — and means a
+fresh clone falls back to `DEFAULT_COMMANDS`. A missing or malformed file also
+falls back to the default rather than silently skipping everything (or nothing).
 
 **What counts as a match.** The prompt must be the invocation and *nothing more* —
 either the raw typed form on a **single line** (`/git-commit-message`,
