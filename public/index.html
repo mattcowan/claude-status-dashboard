@@ -18,14 +18,16 @@
 
     <span class="control">
       <label for="lifeFilter">Session</label>
-      <select id="lifeFilter" title="Filter by session state. “Idle” means no activity for over 10 minutes and no end signal — possibly still open, possibly exited without firing its SessionEnd hook.">
+      <select id="lifeFilter" title="Filter by session state. “Idle” means no activity for over 4 hours and no end signal — possibly still open, possibly exited without firing its SessionEnd hook.">
         <option value="">Any state</option>
         <option value="live">Live</option>
         <option value="idle">Idle</option>
         <option value="ended">Ended</option>
       </select>
     </span>
-    <span class="refresh-note" id="lifeNote"></span>
+    <!-- role=status so changing the filter announces the result: the board is
+         rebuilt wholesale, which a screen reader would otherwise not report. -->
+    <span class="refresh-note filter-note" id="lifeNote" role="status" aria-live="polite"></span>
 
     <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
     <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>

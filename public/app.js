@@ -114,17 +114,34 @@ function isStale(card) {
 // signal it reads "idle", which is the honest answer: possibly open and quiet,
 // possibly long gone. Only `ended` is a fact.
 //
-// Same STALE_MS as the 💤 badge on purpose — one notion of "gone quiet", not
-// two thresholds that can disagree on screen.
+// Deliberately a LONGER threshold than the 💤 badge's STALE_MS, because the two
+// badges answer different questions. 💤 asks "is this waiting on someone?" —
+// ten minutes of quiet is the useful answer there. live/idle asks "is this
+// session still alive at all?", and ten minutes of thinking is nowhere near
+// enough to conclude a session is gone. Four hours is.
+//
+// So a card can legitimately read "💤 20m" and "live" at once. That is not a
+// contradiction: it is awake, and it is waiting for you.
+const IDLE_MS = 4 * 60 * 60 * 1000;
+
 function sessionState(card) {
   if (card.sessionEndedAt) return 'ended';
-  if (!card.lastActiveAt) return 'idle';   // no clock to judge by; don't claim live
-  return isStale(card) ? 'idle' : 'live';
+  // Computed here rather than via isStale(): isStale treats an unparseable
+  // date as "not stale", which would quietly resolve to "live" — the exact
+  // claim we can't support without a usable clock.
+  const t = card.lastActiveAt ? new Date(card.lastActiveAt).getTime() : NaN;
+  if (!isFinite(t)) return 'idle';
+  // A timestamp from the future means the clock is wrong (skew between the
+  // hook that wrote it and this browser, or a hand-edited file). Left alone it
+  // would pin the card to "live" permanently, so treat it as unusable. The
+  // minute of tolerance absorbs ordinary skew without hiding a real problem.
+  if (t - Date.now() > 60 * 1000) return 'idle';
+  return Date.now() - t > IDLE_MS ? 'idle' : 'live';
 }
 
 const SESSION_STATE_TITLE = {
-  live: 'Active within the last 10 minutes',
-  idle: 'No activity for over 10 minutes and no end signal — this session may still be open and quiet, or may have exited without firing its SessionEnd hook',
+  live: 'Active within the last 4 hours',
+  idle: 'No activity for over 4 hours and no end signal — this session may still be open and quiet, or may have exited without firing its SessionEnd hook',
   ended: 'Session ended — its SessionEnd hook fired',
 };
 
@@ -1272,7 +1289,23 @@ function notifyColumnChanges() {
 // ---------- view controls ----------
 
 // Move every card in the Done column into the archive.
+//
+// The Done column's count reflects the active Session filter, but the server
+// archives every done card regardless. Without this check the header could read
+// "1" while the button swept five. Only prompts when the filter is actually
+// hiding something, so the unfiltered flow stays one click as before.
 async function archiveDone() {
+  const doneCol = state.columns.find((c) => c.kind === 'done');
+  if (doneCol && state.life) {
+    const all = state.cards.filter((c) => c.column === doneCol.key);
+    const hidden = all.filter((c) => sessionState(c) !== state.life).length;
+    if (hidden > 0 && !confirm(
+      'Archive all ' + all.length + ' card' + (all.length === 1 ? '' : 's') +
+      ' in “' + doneCol.label + '”?\n\n' +
+      hidden + ' of them ' + (hidden === 1 ? 'is' : 'are') +
+      ' hidden by the current Session filter and will be archived too.'
+    )) return;
+  }
   await api('POST', '/api/archive-done');
   refresh();
 }

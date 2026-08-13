@@ -319,8 +319,8 @@ a fact:
 
 | Badge | Meaning |
 |---|---|
-| 🟢 **live** | Activity within the last 10 minutes. The dot pulses. |
-| 🟠 **idle** | Quiet for 10+ minutes with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
+| 🟢 **live** | Activity within the last 4 hours. The dot pulses. |
+| 🟠 **idle** | Quiet for 4+ hours with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
 | ⚪ **ended** | The session's `SessionEnd` hook fired. Definitive. |
 
 `ended` is written by the `SessionEnd` hook, which is reliable but **not
@@ -328,11 +328,17 @@ guaranteed** — a session lost to a crash, a reboot, or a force-quit never fire
 it. So the absence of an end signal cannot be read as "still running." Earlier
 versions did read it that way, and cards sat there claiming **live** for days.
 
-`idle` uses the same 10-minute threshold as the 💤 badge deliberately, so the
-two can never contradict each other on the same card. A session in the middle of
-one very long turn can therefore show `idle` briefly; the next hook flips it
-back. To retune it, change `STALE_MS` in [`public/app.js`](public/app.js) — both
-badges follow it.
+**This is a longer threshold than the 💤 badge's, on purpose.** The two answer
+different questions. 💤 (10 minutes, `STALE_MS`) asks *is this waiting on
+someone?* — that's an attention signal, and ten minutes is the useful answer.
+live/idle (4 hours, `IDLE_MS`) asks *is this session alive at all?*, where ten
+minutes of thinking proves nothing. So a card can read **💤 20m** and **live**
+at the same time; that isn't a contradiction, it's "awake, and waiting for you."
+Both constants are at the top of [`public/app.js`](public/app.js).
+
+A card with a missing, unparseable, or future-dated `lastActiveAt` reads `idle`
+rather than `live` — with no trustworthy clock, "alive" is not a claim the board
+can make.
 
 **Filtering.** The **Session** dropdown in the topbar filters the board to one
 state (or *Any state*). It's applied client-side, so it re-evaluates against the
