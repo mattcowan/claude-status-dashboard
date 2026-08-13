@@ -165,7 +165,11 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   display: flex;
   gap: 16px;
   padding: 20px;
-  align-items: flex-start;
+  /* stretch, not flex-start: every column matches the tallest one, so a short
+     column still presents a full-height drop target. With flex-start the
+     column ended at its last card and dragging into a near-empty column meant
+     aiming at a ~120px strip beside a much taller neighbour. */
+  align-items: stretch;
   overflow-x: auto;
 }
 
@@ -263,7 +267,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .modal-note { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
 .modal-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .modal-row select { flex: 1 1 auto; }
-.col-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+/* flex:1 so the body — not just the cards in it — absorbs the column's full
+   height. The drop handler is on .column, so this is what makes the empty
+   space below the last card an actual drop target rather than dead pixels. */
+.col-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; }
 .col-empty { color: var(--muted-2); font-size: 12.5px; text-align: center; padding: 18px 8px; }
 
 /* Card */
@@ -396,6 +403,11 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }
 .badge.ended .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
+/* Idle: no end signal, but quiet past the stale threshold. Amber rather than
+   green, and deliberately NOT pulsing — the pulse is what reads as "something
+   is happening", which is exactly the claim we can't make here. */
+.badge.idle { color: var(--warn-text); }
+.badge.idle .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-text); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
 .leftoff {

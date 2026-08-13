@@ -4,6 +4,7 @@ const state = {
   cards: [],
   columns: [],   // [{key,label,kind,color}] from the server
   project: '',
+  life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
   showDone: false,
   archiveOpen: false,
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
@@ -33,6 +34,9 @@ function loadPrefs() {
     state.fillWidth = p.fillWidth !== false;   // default ON
     state.showDone = p.showDone === true;      // default OFF
     state.notify = p.notify === true;          // default OFF
+    // Only accept a known value: a stale or hand-edited pref must not filter
+    // the whole board down to nothing with no obvious way back.
+    state.life = ['live', 'idle', 'ended'].includes(p.life) ? p.life : '';
     state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
   } catch (_) { /* storage unavailable — keep defaults */ }
 }
@@ -42,7 +46,7 @@ function savePrefs() {
     // Prune expanded ids to cards currently on the board so it can't grow unbounded.
     const onBoard = new Set(state.cards.map((c) => c.id));
     const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -98,6 +102,31 @@ function isStale(card) {
   const t = new Date(card.lastActiveAt).getTime();
   return !isNaN(t) && Date.now() - t > STALE_MS;
 }
+
+// Liveness is INFERRED, never known. `sessionEndedAt` is written by the
+// SessionEnd hook, which is reliable but not guaranteed: a session killed by a
+// crash, a reboot, or a force-quit never fires it. Treating "no end signal" as
+// "live" therefore left cards claiming live indefinitely — the board had eight
+// of those, quiet from an hour to over a week, sitting next to four real ones.
+//
+// So the absence of an end signal only means we don't know. A card counts as
+// live while it is still bumping lastActiveAt, and past STALE_MS without an end
+// signal it reads "idle", which is the honest answer: possibly open and quiet,
+// possibly long gone. Only `ended` is a fact.
+//
+// Same STALE_MS as the 💤 badge on purpose — one notion of "gone quiet", not
+// two thresholds that can disagree on screen.
+function sessionState(card) {
+  if (card.sessionEndedAt) return 'ended';
+  if (!card.lastActiveAt) return 'idle';   // no clock to judge by; don't claim live
+  return isStale(card) ? 'idle' : 'live';
+}
+
+const SESSION_STATE_TITLE = {
+  live: 'Active within the last 10 minutes',
+  idle: 'No activity for over 10 minutes and no end signal — this session may still be open and quiet, or may have exited without firing its SessionEnd hook',
+  ended: 'Session ended — its SessionEnd hook fired',
+};
 
 // Branch link only for github.com repos — other hosts use different tree paths.
 function githubBranchUrl(repoUrl, branch) {
@@ -718,8 +747,12 @@ function cardNode(card, inArchive) {
     badges.appendChild(b);
   }
   if (!inArchive) {
-    if (card.sessionEndedAt) badges.appendChild(badge('ended', [el('span', { class: 'live-dot' }, []), 'ended']));
-    else badges.appendChild(badge('live', [el('span', { class: 'live-dot' }, []), 'live']));
+    const life = sessionState(card);
+    const b = badge(life, [el('span', { class: 'live-dot' }, []), life]);
+    b.setAttribute('title', life === 'ended' && card.sessionEndedAt
+      ? SESSION_STATE_TITLE.ended + ' ' + relTime(card.sessionEndedAt)
+      : SESSION_STATE_TITLE[life]);
+    badges.appendChild(b);
   }
   node.appendChild(badges);
 
@@ -855,9 +888,27 @@ function render() {
   const visible = state.columns.filter((c) => c.kind !== 'done' || state.showDone);
   const visibleKeys = visible.map((c) => c.key);
 
+  // The session-state filter is applied client-side rather than server-side
+  // (unlike the project filter) because liveness is a function of the clock:
+  // a card can age from live into idle with no server round-trip, and the
+  // 3s re-render then reflects it for free.
   const byCol = {};
   visible.forEach((c) => { byCol[c.key] = []; });
-  state.cards.forEach((card) => { if (byCol[card.column]) byCol[card.column].push(card); });
+  let hiddenByLife = 0;
+  state.cards.forEach((card) => {
+    if (!byCol[card.column]) return;
+    if (state.life && sessionState(card) !== state.life) { hiddenByLife++; return; }
+    byCol[card.column].push(card);
+  });
+
+  // An active filter plus an empty board looks identical to a broken board —
+  // say which is which.
+  const lifeNote = document.getElementById('lifeNote');
+  if (lifeNote) {
+    lifeNote.textContent = state.life && hiddenByLife
+      ? hiddenByLife + ' hidden by filter'
+      : '';
+  }
 
   visible.forEach((col, index) => {
     const colEl = el('div', { class: 'column' + (col.kind === 'custom' ? ' custom' : ''), 'data-col': col.key }, []);
@@ -1246,6 +1297,11 @@ function setAllExpanded(expand) {
 loadPrefs();
 
 document.getElementById('projectFilter').addEventListener('change', (e) => { state.project = e.target.value; refresh(); });
+const lifeFilterEl = document.getElementById('lifeFilter');
+lifeFilterEl.value = state.life;
+// render(), not refresh(): the filter is purely client-side, so there is
+// nothing to re-fetch and the board updates instantly.
+lifeFilterEl.addEventListener('change', (e) => { state.life = e.target.value; savePrefs(); render(); });
 const showDoneEl = document.getElementById('showDone');
 showDoneEl.checked = state.showDone;
 showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked; savePrefs(); render(); });

@@ -168,9 +168,11 @@ ever does that isn't a task, so it shouldn't appear on the board at all.
 already made — is the same shape, and is skipped for the same reason.
 
 `hook-user-prompt` checks the prompt against a **skip list** ([`lib/skip-prompts.js`](lib/skip-prompts.js))
-*before* it contacts or spawns the server, so a skipped prompt costs one small
-file read and a session that only runs skipped commands never even starts the
-dashboard.
+*before* it contacts or spawns the server, so a session that only runs skipped
+commands never even starts the dashboard. The check itself is one small file
+read. A prompt that actually matches then writes its marker (see below), which
+also sweeps the marker directory — a `readdir` plus a `stat` per marker. It is
+all local file I/O either way: no HTTP, no server process.
 
 Suppressing creation at this one point is sufficient, because every other hook
 path — the Stop backstop, model/meta recording, external-edit tracking,
@@ -193,6 +195,14 @@ built-ins you still want skipped. It lives under the gitignored `data/`, which
 makes it the right home for commands specific to your own setup — and means a
 fresh clone falls back to `DEFAULT_COMMANDS`. A missing or malformed file also
 falls back to the default rather than silently skipping everything (or nothing).
+
+That fallback has no "off" switch, which is worth knowing before you reach for
+one. A file that is well-formed but yields no usable names — `[]`, `[""]`,
+`["  "]`, `["/"]`, `[0]` — is treated exactly like a missing one and restores
+`DEFAULT_COMMANDS`; it does **not** turn skipping off. That is deliberate, so a
+file that got truncated or emptied by accident can't silently put every
+bookkeeping command back on the board. To genuinely skip nothing, empty
+`DEFAULT_COMMANDS` in the source instead.
 
 **What counts as a match.** The prompt must be the invocation and *nothing more* —
 either the raw typed form on a **single line** (`/git-commit-message`,
@@ -301,6 +311,34 @@ and the % text, which carry the same meaning without relying on hue.
   the toggle, never on load).
 - Cards idle for 10+ minutes (and not ended) get a **💤** badge with the
   relative time — an at-a-glance "this one's waiting on someone."
+
+## Session state: live / idle / ended
+
+Every card on the board carries one of three state badges. Only one of them is
+a fact:
+
+| Badge | Meaning |
+|---|---|
+| 🟢 **live** | Activity within the last 10 minutes. The dot pulses. |
+| 🟠 **idle** | Quiet for 10+ minutes with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
+| ⚪ **ended** | The session's `SessionEnd` hook fired. Definitive. |
+
+`ended` is written by the `SessionEnd` hook, which is reliable but **not
+guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires
+it. So the absence of an end signal cannot be read as "still running." Earlier
+versions did read it that way, and cards sat there claiming **live** for days.
+
+`idle` uses the same 10-minute threshold as the 💤 badge deliberately, so the
+two can never contradict each other on the same card. A session in the middle of
+one very long turn can therefore show `idle` briefly; the next hook flips it
+back. To retune it, change `STALE_MS` in [`public/app.js`](public/app.js) — both
+badges follow it.
+
+**Filtering.** The **Session** dropdown in the topbar filters the board to one
+state (or *Any state*). It's applied client-side, so it re-evaluates against the
+clock on every render — a card ages out of *Live* on its own without a
+round-trip — and the choice persists in `localStorage`. When it hides anything,
+the topbar says how many, so a filtered board never reads as an empty one.
 
 ## Plan & transcript on the card
 
