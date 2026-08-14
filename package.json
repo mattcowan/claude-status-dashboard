@@ -23,6 +23,7 @@
     "claude-status": "bin/status.js"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   }
 }

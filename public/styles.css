@@ -101,6 +101,10 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .btn-group { display: inline-flex; gap: 6px; }
 
 .refresh-note { font-size: 12px; color: var(--muted-2); min-width: 120px; text-align: right; }
+/* The filter note sits inline in the topbar rather than pinned to the right
+   edge, so it must not reserve .refresh-note's 120px gutter while empty —
+   that pushed the topbar into wrapping earlier than it used to. */
+.filter-note { min-width: 0; text-align: left; }
 
 /* Usage-limits strip (data from the undocumented OAuth usage endpoint) */
 .usage-strip {
@@ -165,7 +169,11 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
   display: flex;
   gap: 16px;
   padding: 20px;
-  align-items: flex-start;
+  /* stretch, not flex-start: every column matches the tallest one, so a short
+     column still presents a full-height drop target. With flex-start the
+     column ended at its last card and dragging into a near-empty column meant
+     aiming at a ~120px strip beside a much taller neighbour. */
+  align-items: stretch;
   overflow-x: auto;
 }
 
@@ -263,7 +271,12 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 .modal-note { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
 .modal-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .modal-row select { flex: 1 1 auto; }
-.col-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+/* flex:1 lets the body absorb the column's leftover height so the cards stay
+   top-aligned within it. It is NOT what makes the empty space droppable — the
+   drag handlers are on .column, which `align-items: stretch` on .board already
+   makes full height. Removing this would not break drops, only the body's
+   ownership of that space. */
+.col-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; }
 .col-empty { color: var(--muted-2); font-size: 12.5px; text-align: center; padding: 18px 8px; }
 
 /* Card */
@@ -396,6 +409,13 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .badge.live .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--completed); animation: pulse 1.6s infinite; }
 .badge.ended { color: var(--muted-2); }
 .badge.ended .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
+/* Idle: no end signal, and quiet past IDLE_MS (4 hours) — the liveness
+   threshold, NOT the 10-minute STALE_MS behind the 💤 badge; a card can be 💤
+   stale and still live. Amber rather than green, and deliberately NOT pulsing —
+   the pulse is what reads as "something is happening", which is exactly the
+   claim we can't make here. */
+.badge.idle { color: var(--warn-text); }
+.badge.idle .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn-text); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
 
 .leftoff {

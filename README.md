@@ -164,26 +164,45 @@ Some slash commands are bookkeeping, not work. `/git-commit-message` is the
 motivating case: it's run inside an already-open, higher-tier session precisely
 to avoid switching models just to draft a commit message. A session that only
 ever does that isn't a task, so it shouldn't appear on the board at all.
+`/git-review` — a read-only pre-commit gate over changes some other session
+already made — is the same shape, and is skipped for the same reason.
 
 `hook-user-prompt` checks the prompt against a **skip list** ([`lib/skip-prompts.js`](lib/skip-prompts.js))
-*before* it contacts or spawns the server, so a skipped prompt costs one small
-file read and a session that only runs skipped commands never even starts the
-dashboard.
+*before* it contacts or spawns the server, so a session that only runs skipped
+commands never even starts the dashboard. The check itself is one small file
+read. A prompt that actually matches then writes its marker (see below), which
+also sweeps the marker directory — a `readdir` plus a `stat` per marker. It is
+all local file I/O either way: no HTTP, no server process.
 
 Suppressing creation at this one point is sufficient, because every other hook
 path — the Stop backstop, model/meta recording, external-edit tracking,
 session-end — no-ops when the card is absent rather than creating one.
 
-**Configuring the list.** The default is `["git-commit-message"]`. To change it,
-write a JSON array of command names (leading slash optional) to
-`data/skip-prompts.json`:
+**Configuring the list.** There is one list, in one place. The shipped default
+is `DEFAULT_COMMANDS` at the top of [`lib/skip-prompts.js`](lib/skip-prompts.js)
+— currently `["git-commit-message", "git-review"]`. Add a command there to skip
+it for every install.
+
+To override it on one machine without touching the code, write a JSON array of
+command names (leading slash optional) to `data/skip-prompts.json`:
 
 ```json
-["git-commit-message", "insights"]
+["git-commit-message", "git-review", "insights"]
 ```
 
-A missing or malformed file falls back to the default rather than silently
-skipping everything (or nothing).
+That file **replaces** the default rather than adding to it, so repeat any
+built-ins you still want skipped. It lives under the gitignored `data/`, which
+makes it the right home for commands specific to your own setup — and means a
+fresh clone falls back to `DEFAULT_COMMANDS`. A missing or malformed file also
+falls back to the default rather than silently skipping everything (or nothing).
+
+That fallback has no "off" switch, which is worth knowing before you reach for
+one. A file that is well-formed but yields no usable names — `[]`, `[""]`,
+`["  "]`, `["/"]`, `[0]` — is treated exactly like a missing one and restores
+`DEFAULT_COMMANDS`; it does **not** turn skipping off. That is deliberate, so a
+file that got truncated or emptied by accident can't silently put every
+bookkeeping command back on the board. To genuinely skip nothing, empty
+`DEFAULT_COMMANDS` in the source instead.
 
 **What counts as a match.** The prompt must be the invocation and *nothing more* —
 either the raw typed form on a **single line** (`/git-commit-message`,
@@ -292,6 +311,40 @@ and the % text, which carry the same meaning without relying on hue.
   the toggle, never on load).
 - Cards idle for 10+ minutes (and not ended) get a **💤** badge with the
   relative time — an at-a-glance "this one's waiting on someone."
+
+## Session state: live / idle / ended
+
+Every card on the board carries one of three state badges. Only one of them is
+a fact:
+
+| Badge | Meaning |
+|---|---|
+| 🟢 **live** | Activity within the last 4 hours. The dot pulses. |
+| 🟠 **idle** | Quiet for 4+ hours with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
+| ⚪ **ended** | The session's `SessionEnd` hook fired. Definitive. |
+
+`ended` is written by the `SessionEnd` hook, which is reliable but **not
+guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires
+it. So the absence of an end signal cannot be read as "still running." Earlier
+versions did read it that way, and cards sat there claiming **live** for days.
+
+**This is a longer threshold than the 💤 badge's, on purpose.** The two answer
+different questions. 💤 (10 minutes, `STALE_MS`) asks *is this waiting on
+someone?* — that's an attention signal, and ten minutes is the useful answer.
+live/idle (4 hours, `IDLE_MS`) asks *is this session alive at all?*, where ten
+minutes of thinking proves nothing. So a card can read **💤 20m** and **live**
+at the same time; that isn't a contradiction, it's "awake, and waiting for you."
+Both constants are at the top of [`public/app.js`](public/app.js).
+
+A card with a missing, unparseable, or future-dated `lastActiveAt` reads `idle`
+rather than `live` — with no trustworthy clock, "alive" is not a claim the board
+can make.
+
+**Filtering.** The **Session** dropdown in the topbar filters the board to one
+state (or *Any state*). It's applied client-side, so it re-evaluates against the
+clock on every render — a card ages out of *Live* on its own without a
+round-trip — and the choice persists in `localStorage`. When it hides anything,
+the topbar says how many, so a filtered board never reads as an empty one.
 
 ## Plan & transcript on the card
 
