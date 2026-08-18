@@ -164,10 +164,13 @@ async function handleApi(req, res, pathname, query) {
     // commands (/git-review, /git-commit-message — see lib/skip-prompts.js)
     // must not get a card just because this POST came from bin/status.js's
     // own set/note/needs-input/done-for-review subcommands rather than the
-    // UserPromptSubmit hook. A real prompt always consumes (deletes) the
-    // marker before issuing its own card-creating POST, so if the marker is
-    // still present here, this request did not originate from real work.
-    if (isNew && skipPrompts.hasPendingSkip(body.session)) {
+    // UserPromptSubmit hook. The hook's own POST (source: 'prompt') is exempt
+    // from this check and always wins: it already self-certifies real work by
+    // construction (it's only ever sent after skip.match() returned falsy
+    // client-side), and takeRecord()'s marker deletion is best-effort — a
+    // transient unlink failure could otherwise leave the marker on disk and
+    // cause this check to wrongly suppress a legitimate prompt-driven card.
+    if (isNew && body.source !== 'prompt' && skipPrompts.hasPendingSkip(body.session)) {
       return sendJson(res, 200, { card: null, suppressed: true });
     }
     const repoUrl = body.project ? repo.webUrl(body.project) : null;
