@@ -106,3 +106,23 @@ test('non-prompts and unknown commands are never skipped', () => {
     assert.strictEqual(skip.match(prompt), '', `should be real work: ${JSON.stringify(prompt)}`);
   }
 });
+
+// Regression for the "second door": bin/status.js's set/note/needs-input/
+// done-for-review subcommands reach the same card-creating server endpoint as
+// the UserPromptSubmit hook, but through resolveOrCreateSession() rather than
+// the hook's own skip.match() check. server.js closes that gap by asking
+// hasPendingSkip() before creating any *new* card. This pins the marker
+// lifecycle that check depends on: present after record(), gone after
+// takeRecord() — the same consume-on-real-prompt sequence hookUserPrompt()
+// relies on to distinguish "real prompt POST" from "bookkeeping CLI POST".
+test('hasPendingSkip reflects the record/takeRecord lifecycle', () => {
+  const sessionId = 'test-hasPendingSkip-' + process.pid;
+  assert.strictEqual(skip.hasPendingSkip(sessionId), false, 'no marker before any skip is recorded');
+
+  skip.record(sessionId, 'git-review');
+  assert.strictEqual(skip.hasPendingSkip(sessionId), true, 'marker present after a skip is recorded');
+
+  const rec = skip.takeRecord(sessionId);
+  assert.ok(rec && rec.count === 1, 'takeRecord returns what was recorded');
+  assert.strictEqual(skip.hasPendingSkip(sessionId), false, 'marker consumed after takeRecord');
+});
