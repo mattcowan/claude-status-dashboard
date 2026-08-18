@@ -17,6 +17,7 @@ const { Store } = require('./lib/store');
 const repo = require('./lib/repo');
 const usage = require('./lib/usage');
 const settings = require('./lib/settings');
+const skipPrompts = require('./lib/skip-prompts');
 
 const VERSION = require('./package.json').version;
 const store = new Store();
@@ -155,11 +156,21 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
-    const repoUrl = body.project ? repo.webUrl(body.project) : null;
     // Read before the upsert: skippedBefore only means something on the POST
     // that actually mints the card. On an existing card it would be reporting a
     // mid-session /git-commit-message, which is routine and not worth flagging.
     const isNew = !store.getCard(body.session);
+    // A session whose only prompts so far were skip-listed bookkeeping
+    // commands (/git-review, /git-commit-message — see lib/skip-prompts.js)
+    // must not get a card just because this POST came from bin/status.js's
+    // own set/note/needs-input/done-for-review subcommands rather than the
+    // UserPromptSubmit hook. A real prompt always consumes (deletes) the
+    // marker before issuing its own card-creating POST, so if the marker is
+    // still present here, this request did not originate from real work.
+    if (isNew && skipPrompts.hasPendingSkip(body.session)) {
+      return sendJson(res, 200, { card: null, suppressed: true });
+    }
+    const repoUrl = body.project ? repo.webUrl(body.project) : null;
     const card = store.upsertSession(body.session, body.project, body.source, repoUrl, body.model);
     store.setSessionMeta(body.session, body);
     if (isNew && body.skippedBefore) store.noteSkippedBefore(body.session, body.skippedBefore);

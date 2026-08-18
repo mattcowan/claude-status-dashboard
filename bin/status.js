@@ -139,6 +139,12 @@ async function resolveSession(args) {
 // Like resolveSession, but if no card exists yet (e.g. a session that started
 // before the hooks were installed, or one invoked via /status), create one so
 // the update has somewhere to land.
+//
+// Returns null when the server deliberately refused to create a card — a
+// session whose only prompts so far were skip-listed bookkeeping commands
+// (see lib/skip-prompts.js) — rather than the id of a card that doesn't
+// exist, so callers can report that plainly instead of a confusing 404 on
+// the follow-up update.
 async function resolveOrCreateSession(args) {
   // A session's own id (explicit flag or the env var Claude Code exposes)
   // uniquely identifies its card — it must win over cwd matching, otherwise a
@@ -146,7 +152,8 @@ async function resolveOrCreateSession(args) {
   // hijack it. Ensuring the card just touches it if it already exists.
   const id = args.session || envSessionId();
   if (id) {
-    await request('POST', '/api/cards', { session: id, project: process.cwd() });
+    const r = await request('POST', '/api/cards', { session: id, project: process.cwd() });
+    if (r.json && r.json.suppressed) return null;
     return id;
   }
   // No session id available (non-Claude-Code invocation): fall back to an
@@ -266,7 +273,9 @@ async function claudeUpdate(fields, label) {
   await ensureServer();
   const session = await resolveOrCreateSession(args);
   if (!session) {
-    process.stderr.write('[status] Could not resolve or create a status card for this folder.\n');
+    process.stderr.write('[status] No card created: this session has only run skip-listed ' +
+      'bookkeeping commands (e.g. /git-review, /git-commit-message) so far — see ' +
+      'lib/skip-prompts.js. If real work follows, the next prompt will create the card.\n');
     process.exit(1);
   }
   // Merge CLI-provided text into the update.
