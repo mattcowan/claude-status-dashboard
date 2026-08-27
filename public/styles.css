@@ -11,6 +11,7 @@
   --danger-text: #ff9b9b;   /* external-edit label on dark tint */
   --warn-text: #f0b64a;     /* auto / left-off labels on dark tint */
   --flag-text: #c08bff;     /* "started late" label — distinct from warn */
+  --cmd-text: #4fd3dd;      /* /git-review & /git-commit-message tags */
 
   --working: #4c8dff;
   --needs: #f5a623;
@@ -34,6 +35,7 @@
     --danger-text: #c0392b;   /* external-edit label on light tint */
     --warn-text: #8a5a00;     /* auto / left-off labels on light tint */
     --flag-text: #6b3fa0;     /* "started late" label — darkened for light bg */
+    --cmd-text: #0f6a72;      /* command tags — darkened to pass 4.5:1 on light */
     --shadow: 0 1px 2px rgba(20,30,50,.06), 0 8px 24px rgba(20,30,50,.08);
   }
 }
@@ -400,6 +402,11 @@ a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
 /* Session was kept off the board for its first turns (skip-listed commands) */
 .badge.skipped { color: var(--flag-text); border-color: rgba(160,107,255,.4); background: rgba(160,107,255,.12); }
+/* Bookkeeping slash commands (/git-review, /git-commit-message) a session ran.
+   Teal keeps them distinct from the purple "started late" flag they often sit
+   beside — the two say different things about the same commands. */
+.badge.cmd { color: var(--cmd-text); border-color: rgba(36,184,196,.38); background: rgba(36,184,196,.12); }
+.badge.cmd .cmd-n { color: var(--muted-2); font-size: 10px; margin-left: 4px; }
 .badge.branch { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 a.badge.branch { color: var(--accent-plain); text-decoration: none; }
 a.badge.branch:hover { border-color: var(--accent-plain); background: var(--panel-2); }
@@ -595,6 +602,111 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
   font-size: 12px;
   line-height: 1.5;
   margin: 10px 0 0;
+}
+
+/* ---------- projects view ---------- */
+
+.projects-view { padding: 20px; }
+.projects-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; }
+.projects-head h2 { font-size: 15px; margin: 0; }
+.projects-sub { margin: 0; font-size: 12.5px; color: var(--muted-2); }
+
+/* The table can outgrow the window in both directions (six columns, one of them
+   a file path; one row per project ever opened), so it scrolls inside its own
+   box rather than making the page scroll sideways. The max-height is what makes
+   the sticky header below actually stick: a sticky cell sticks to its nearest
+   scrollport, so without a scrollport of its own here it would only ever have
+   scrolled away with the page. */
+.table-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 230px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+/* A scrollable region needs to be reachable by keyboard. The rows do hold
+   focusable controls, which drags the scroll along, but a row that is all plain
+   text would otherwise be unreachable — so the box itself takes focus. */
+.table-scroll:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
+.projects-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.projects-table th, .projects-table td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.projects-table tbody tr:last-child td { border-bottom: 0; }
+.projects-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: .2px;
+  white-space: nowrap;
+}
+.projects-table tbody tr:hover { background: var(--panel-2); }
+
+.th-sort {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.th-sort:hover { color: var(--text); }
+.th-sort.active { color: var(--accent-plain); }
+.th-sort.active::after { content: ' ▾'; font-size: 9px; }
+.th-sort[data-sort="name"].active::after { content: ' ▴'; }
+
+.p-name { min-width: 220px; }
+.p-path {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  word-break: break-all;
+}
+.p-count { white-space: nowrap; }
+.p-total { font-weight: 650; font-size: 15px; }
+.p-split { display: block; margin-top: 3px; font-size: 11px; color: var(--muted-2); }
+.p-cmds { min-width: 150px; }
+.p-cmds .badge { margin: 0 4px 4px 0; }
+.p-last { min-width: 220px; max-width: 380px; }
+.p-last-text { display: block; }
+.p-last-text.auto-title { color: var(--muted); font-style: italic; }
+.p-last .placeholder { color: var(--muted-2); font-style: italic; }
+/* Block, not inline-block: the headline above it is a block span, but the
+   "(no headline)" placeholder that replaces it is not, and an inline .p-where
+   ran straight on from it as "(no headline)working". */
+.p-where {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted-2);
+  text-transform: lowercase;
+}
+.p-when { white-space: nowrap; color: var(--muted); }
+.p-when-abs { display: block; margin-top: 3px; font-size: 11px; color: var(--muted-2); }
+.p-links { white-space: nowrap; }
+.p-links .badge { margin: 0 4px 4px 0; }
+.p-links .placeholder { color: var(--muted-2); }
+.projects-table .col-empty { padding: 30px 12px; }
+
+/* Visually hidden but read aloud — used for the table's <caption>. */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .archive-view { padding: 20px; }

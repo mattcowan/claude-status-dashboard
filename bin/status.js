@@ -191,6 +191,17 @@ async function hookUserPrompt() {
   const skipped = skipPrompts.match(input.prompt);
   if (skipped) {
     if (session) skipPrompts.record(session, skipped);
+    // Tell the dashboard, so a session that already HAS a card gets tagged with
+    // the command it just ran. Posted directly rather than through
+    // ensureServer(): the whole point of this branch is that a bookkeeping
+    // prompt must never start the server, so when nothing is listening the
+    // request fails fast on ECONNREFUSED and the tag is simply lost. The
+    // marker file record() just wrote is the durable half — if this session
+    // goes on to real work, the tag arrives with skippedBefore instead.
+    if (session) {
+      await request('POST', '/api/hook/skipped-command',
+        { session: session, command: skipped, project: cwd }, 1500);
+    }
     process.exit(0);
   }
 

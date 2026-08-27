@@ -4,9 +4,14 @@ const state = {
   cards: [],
   columns: [],   // [{key,label,kind,color}] from the server
   project: '',
+  projectList: [],  // last /api/projects payload, re-rendered when "Show done" flips
   life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
+  cmd: '',       // '' | 'any' | '<command>' — client-side skip-command filter (persisted)
   showDone: false,
   archiveOpen: false,
+  projectsOpen: false,
+  projectRows: [],          // last /api/projects/summary payload
+  projectSort: 'recent',    // 'recent' | 'name' | 'sessions'
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
   fillWidth: true,         // columns grow to fill wide screens (persisted)
   expanded: new Set(),     // card ids explicitly expanded (default is collapsed; persisted)
@@ -37,6 +42,12 @@ function loadPrefs() {
     // Only accept a known value: a stale or hand-edited pref must not filter
     // the whole board down to nothing with no obvious way back.
     state.life = ['live', 'idle', 'ended'].includes(p.life) ? p.life : '';
+    // The command filter's options are built from whatever the skip list holds,
+    // so any string is potentially valid; only its length is bounded. An option
+    // that no longer matches any card simply filters to an empty board, which
+    // the filter note explains.
+    state.cmd = typeof p.cmd === 'string' ? p.cmd.slice(0, 60) : '';
+    state.projectSort = ['recent', 'name', 'sessions'].includes(p.projectSort) ? p.projectSort : 'recent';
     state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
   } catch (_) { /* storage unavailable — keep defaults */ }
 }
@@ -46,7 +57,7 @@ function savePrefs() {
     // Prune expanded ids to cards currently on the board so it can't grow unbounded.
     const onBoard = new Set(state.cards.map((c) => c.id));
     const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -93,6 +104,47 @@ function repoShortLabel(url) {
     const parts = new URL(url).pathname.split('/').filter(Boolean);
     return parts.slice(-2).join('/') || url;
   } catch (_) { return url; }
+}
+
+// Presentation for the skip-listed bookkeeping commands a card can be tagged
+// with. Anything not listed here still gets a tag, with the generic glyph — the
+// skip list is user-configurable (data/skip-prompts.json), so this map is a
+// nicety for the two built-ins rather than the source of truth for what exists.
+const CMD_TAGS = {
+  'git-review': { glyph: '🔍', title: 'Ran the pre-commit review skill in this session' },
+  'git-commit-message': { glyph: '✎', title: 'Drafted a commit message in this session' },
+};
+const CMD_GLYPH_FALLBACK = '⌘';
+
+// Every skip-listed command recorded against a card, deduplicated and sorted.
+// Mirrors skipCommandNames() in lib/store.js and unions the same two sources:
+// skippedBefore.commands (runs from before the card existed) and skipCommands
+// (runs reported live once it did).
+function skipCommandNames(card) {
+  const names = new Set();
+  if (card.skippedBefore && Array.isArray(card.skippedBefore.commands)) {
+    card.skippedBefore.commands.forEach((n) => { if (n) names.add(n); });
+  }
+  if (card.skipCommands) {
+    Object.keys(card.skipCommands).forEach((n) => { if (n) names.add(n); });
+  }
+  return Array.from(names).sort();
+}
+
+// How many times a command ran on this card, as far as the record goes. The
+// pre-card runs in skippedBefore are only counted in aggregate (the marker
+// keeps one total across all skipped commands, not a per-command tally), so a
+// name that appears only there reports "1+" rather than inventing a figure.
+function skipCommandDetail(card, name) {
+  const live = (card.skipCommands && card.skipCommands[name]) || null;
+  const before = !!(card.skippedBefore &&
+    Array.isArray(card.skippedBefore.commands) &&
+    card.skippedBefore.commands.includes(name));
+  return {
+    count: live ? (Number(live.count) || 1) : 0,
+    approx: before,
+    lastAt: live ? live.lastAt : (card.skippedBefore && card.skippedBefore.firstAt) || null,
+  };
 }
 
 // A session with no activity for this long gets the 💤 badge (never dimmed).
@@ -259,18 +311,202 @@ async function refresh() {
   await refreshProjects();
   document.getElementById('refreshNote').textContent = 'updated ' + new Date().toLocaleTimeString();
   if (state.archiveOpen) refreshArchive();
+  if (state.projectsOpen) refreshProjectRows();
 }
 
 async function refreshProjects() {
   const data = (await api('GET', '/api/projects')).json;
+  state.projectList = (data && data.projects) || [];
+  renderProjectFilter();
+}
+
+// The count in parentheses must match what the board is actually showing, so it
+// tracks the "Show done" toggle: with Done hidden, a project's finished cards
+// are not on screen and counting them made the dropdown overstate the work in
+// flight. Rendered separately from the fetch because flipping that toggle is a
+// purely client-side re-render with nothing to re-request.
+function renderProjectFilter() {
   const sel = document.getElementById('projectFilter');
+  if (!sel) return;
   const current = state.project;
   const opts = ['<option value="">All projects</option>'];
-  ((data && data.projects) || []).forEach((p) => {
+  state.projectList.forEach((p) => {
+    const n = state.showDone ? p.count : (p.activeCount != null ? p.activeCount : p.count);
     opts.push('<option value="' + escapeHtml(p.project) + '"' + (p.project === current ? ' selected' : '') + '>' +
-      escapeHtml(p.projectLabel) + ' (' + p.count + ')</option>');
+      escapeHtml(p.projectLabel) + ' (' + n + ')</option>');
   });
-  sel.innerHTML = opts.join('');
+  setOptions(sel, opts.join(''));
+}
+
+// Replace a <select>'s options only when they actually changed. render() runs
+// on every board refresh, and rewriting innerHTML underneath an open or focused
+// dropdown closes it and loses the keyboard position.
+function setOptions(sel, html) {
+  if (sel.dataset.sig === html) return;
+  sel.dataset.sig = html;
+  sel.innerHTML = html;
+}
+
+// ---------- projects view ----------
+
+// Whole-history roll-up: every project any session has ever run in, board and
+// archive alike. The board can only answer "what is in flight"; this answers
+// "what have I worked on", which is why it has its own endpoint rather than
+// being derived from state.cards.
+async function refreshProjectRows() {
+  const data = (await api('GET', '/api/projects/summary')).json;
+  state.projectRows = (data && data.projects) || [];
+  renderProjects();
+}
+
+const PROJECT_SORTS = {
+  recent: (a, b) => String(b.lastActiveAt).localeCompare(String(a.lastActiveAt)),
+  name: (a, b) => String(a.projectLabel).localeCompare(String(b.projectLabel)) ||
+    String(a.project).localeCompare(String(b.project)),
+  sessions: (a, b) => (b.total - a.total) ||
+    String(b.lastActiveAt).localeCompare(String(a.lastActiveAt)),
+};
+
+function renderProjects() {
+  const body = document.getElementById('projectsBody');
+  if (!body) return;
+  body.innerHTML = '';
+
+  const rows = state.projectRows.slice().sort(PROJECT_SORTS[state.projectSort] || PROJECT_SORTS.recent);
+
+  const sub = document.getElementById('projectsSub');
+  if (sub) {
+    const sessions = rows.reduce((n, r) => n + r.total, 0);
+    sub.textContent = rows.length
+      ? rows.length + (rows.length === 1 ? ' project' : ' projects') + ', ' +
+        sessions + (sessions === 1 ? ' session' : ' sessions') + ' on the board and in the archive'
+      : '';
+  }
+
+  // Reflect the active sort on the header buttons for both sighted and
+  // assistive-tech users: aria-sort on the cell, a caret in the label.
+  document.querySelectorAll('.projects-table th').forEach((th) => {
+    const btn = th.querySelector('.th-sort');
+    if (!btn) return;
+    const active = btn.dataset.sort === state.projectSort;
+    th.setAttribute('aria-sort', active ? (btn.dataset.sort === 'name' ? 'ascending' : 'descending') : 'none');
+    btn.classList.toggle('active', active);
+  });
+
+  if (!rows.length) {
+    body.appendChild(el('tr', {}, [
+      el('td', { class: 'col-empty', colspan: '6', text: 'No projects recorded yet.' }, []),
+    ]));
+    return;
+  }
+
+  rows.forEach((row) => body.appendChild(projectRowNode(row)));
+
+  // The table is rebuilt on every refresh, so an open folder menu belonging to
+  // one of these rows has just lost its anchor node — same problem the board
+  // has, same fix (projectFolderButton re-points it at the fresh button).
+  if (activePathMenu) {
+    if (activePathMenu.anchor.isConnected) placePathMenu();
+    else closePathMenu();
+  }
+}
+
+// The 📁 button in a project row: the same folder menu the cards use, keyed by
+// project path instead of card id, and pointed at the project's most recent
+// card so "Open in Explorer" still reads its path from a stored record.
+function projectFolderButton(row) {
+  const target = {
+    key: 'proj:' + row.project,
+    project: row.project,
+    cardId: row.lastCard ? row.lastCard.id : null,
+  };
+  const btn = el('button', {
+    class: 'badge project path-btn',
+    type: 'button',
+    title: row.project + '\n(click for folder actions)',
+    'aria-haspopup': 'true',
+    'aria-expanded': 'false',
+  }, ['📁 ' + (row.projectLabel || '(unknown)'), el('span', { class: 'pm-caret', text: '▾' }, [])]);
+  btn.addEventListener('click', (e) => { e.stopPropagation(); showPathMenu(target, btn); });
+  if (activePathMenu && activePathMenu.key === target.key) {
+    btn.setAttribute('aria-expanded', 'true');
+    activePathMenu.anchor = btn;
+  }
+  return btn;
+}
+
+function projectRowNode(row) {
+  // Sessions cell: the total, then the split that says where they are now.
+  // Zeroes are dropped so a project with five archived sessions reads
+  // "5 · 5 archived" rather than "5 · 0 active, 0 done, 5 archived".
+  const parts = [];
+  if (row.active) parts.push(row.active + ' on board');
+  if (row.done) parts.push(row.done + ' done');
+  if (row.archived) parts.push(row.archived + ' archived');
+
+  const last = row.lastCard;
+  const lastLabel = last ? (last.headline || last.autoTitle || '') : '';
+  const lastCell = el('td', { class: 'p-last' }, [
+    lastLabel
+      ? el('span', { class: 'p-last-text' + (last.headline ? '' : ' auto-title'), text: lastLabel }, [])
+      : el('span', { class: 'placeholder', text: '(no headline)' }, []),
+    last
+      ? el('span', {
+          class: 'p-where',
+          text: last.archived ? 'archived' : labelOf(last.column),
+        }, [])
+      : null,
+  ].filter(Boolean));
+
+  const links = el('td', { class: 'p-links' }, []);
+  if (row.repoUrl) {
+    links.appendChild(el('a', {
+      class: 'badge repo',
+      href: row.repoUrl,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: row.repoUrl,
+    }, ['↗ ' + repoShortLabel(row.repoUrl)]));
+  }
+  if (row.gitBranch) {
+    const branchUrl = githubBranchUrl(row.repoUrl, row.gitBranch);
+    links.appendChild(branchUrl
+      ? el('a', { class: 'badge branch', href: branchUrl, target: '_blank', rel: 'noopener noreferrer', title: 'Open branch on GitHub' }, ['⎇ ' + row.gitBranch])
+      : el('span', { class: 'badge branch', title: 'Git branch of the most recent session' }, ['⎇ ' + row.gitBranch]));
+  }
+  if (!row.repoUrl && !row.gitBranch) {
+    links.appendChild(el('span', { class: 'placeholder', text: '—' }, []));
+  }
+
+  const cmds = el('td', { class: 'p-cmds' }, []);
+  const names = Object.keys(row.skipCommands || {}).sort();
+  if (!names.length) cmds.appendChild(el('span', { class: 'placeholder', text: '—' }, []));
+  names.forEach((name) => {
+    const meta = CMD_TAGS[name] || {};
+    const n = row.skipCommands[name];
+    const b = badge('cmd', [(meta.glyph || CMD_GLYPH_FALLBACK) + ' /' + name,
+      n > 1 ? el('span', { class: 'cmd-n', text: '×' + n }, []) : null].filter(Boolean));
+    b.setAttribute('title', n + (n === 1 ? ' session' : ' sessions') + ' in this project ran /' + name);
+    cmds.appendChild(b);
+  });
+
+  return el('tr', {}, [
+    el('td', { class: 'p-name' }, [
+      projectFolderButton(row),
+      el('div', { class: 'p-path', title: row.project, text: shortPath(row.project) }, []),
+    ]),
+    el('td', { class: 'p-count' }, [
+      el('span', { class: 'p-total', text: String(row.total) }, []),
+      parts.length ? el('span', { class: 'p-split', text: parts.join(' · ') }, []) : null,
+    ].filter(Boolean)),
+    cmds,
+    lastCell,
+    el('td', { class: 'p-when', title: row.lastActiveAt || '' }, [
+      relTime(row.lastActiveAt),
+      row.lastActiveAt ? el('span', { class: 'p-when-abs', text: dateClock(row.lastActiveAt) }, []) : null,
+    ].filter(Boolean)),
+    links,
+  ]);
 }
 
 async function refreshArchive() {
@@ -344,11 +580,20 @@ function placePathMenu() {
   node.style.top = top + 'px';
 }
 
-function showPathMenu(card, anchor) {
+// The menu is opened from two places now — a card's 📁 badge and a row of the
+// Projects table — so it takes a plain target rather than a card:
+//   { key, project, cardId }
+// `key` identifies the menu for reclick-to-close and for re-anchoring after a
+// re-render; `cardId` is the card whose stored path the open-folder endpoint
+// will use. That endpoint deliberately never takes a path from the request
+// body, so a target with no card behind it can copy and open in VS Code but
+// cannot reveal the folder in the file manager.
+function showPathMenu(target, anchor) {
   // Second click on the same badge closes rather than reopens.
-  const reclick = activePathMenu && activePathMenu.cardId === card.id;
+  const reclick = activePathMenu && activePathMenu.key === target.key;
   closePathMenu();
   if (reclick) return;
+  const dir = target.project;
 
   const status = el('div', { class: 'pm-status' }, []);
   const flash = (msg, bad) => {
@@ -356,17 +601,21 @@ function showPathMenu(card, anchor) {
     status.className = 'pm-status' + (bad ? ' bad' : '');
   };
 
-  const openBtn = el('button', { class: 'pm-item', type: 'button', role: 'menuitem', tabindex: '-1' }, ['📂 Open in Explorer']);
-  openBtn.addEventListener('click', async () => {
-    flash('Opening…');
-    const r = await api('POST', '/api/cards/' + encodeURIComponent(card.id) + '/open-folder');
-    if (r.ok && r.json && r.json.ok) { closePathMenu(); return; }
-    flash((r.json && r.json.error) || 'Could not open the folder', true);
-  });
+  const openBtn = target.cardId
+    ? el('button', { class: 'pm-item', type: 'button', role: 'menuitem', tabindex: '-1' }, ['📂 Open in Explorer'])
+    : null;
+  if (openBtn) {
+    openBtn.addEventListener('click', async () => {
+      flash('Opening…');
+      const r = await api('POST', '/api/cards/' + encodeURIComponent(target.cardId) + '/open-folder');
+      if (r.ok && r.json && r.json.ok) { closePathMenu(); return; }
+      flash((r.json && r.json.error) || 'Could not open the folder', true);
+    });
+  }
 
   const codeLink = el('a', {
     class: 'pm-item',
-    href: vscodeFolderUri(card.project),
+    href: vscodeFolderUri(dir),
     role: 'menuitem',
     tabindex: '-1',
     title: 'Opens the folder in a new VS Code window (the browser may ask to allow the vscode: link)',
@@ -375,18 +624,18 @@ function showPathMenu(card, anchor) {
 
   const copyBtn = el('button', { class: 'pm-item', type: 'button', role: 'menuitem', tabindex: '-1' }, ['📋 Copy path']);
   copyBtn.addEventListener('click', async () => {
-    const ok = await copyText(card.project);
+    const ok = await copyText(dir);
     if (ok) { closePathMenu(); return; }
     flash('Copy failed', true);
   });
 
-  const menu = el('div', { class: 'path-menu', role: 'menu', 'aria-label': 'Folder actions for ' + card.project }, [
-    el('div', { class: 'pm-path', text: card.project }, []),
+  const menu = el('div', { class: 'path-menu', role: 'menu', 'aria-label': 'Folder actions for ' + dir }, [
+    el('div', { class: 'pm-path', text: dir }, []),
     openBtn,
     codeLink,
     copyBtn,
     status,
-  ]);
+  ].filter(Boolean));
   // Off-screen first so the height is measurable before placing it.
   menu.style.left = '-9999px';
   menu.style.top = '0px';
@@ -403,8 +652,8 @@ function showPathMenu(card, anchor) {
   };
   // role="menu" promises arrow-key navigation, so provide it: the items are
   // tabindex="-1" and focus roves between them. Tab leaves the menu entirely,
-  // which for a 3-item popup is the least surprising thing.
-  const items = [openBtn, codeLink, copyBtn];
+  // which for a popup this small is the least surprising thing.
+  const items = [openBtn, codeLink, copyBtn].filter(Boolean);
   const onKey = (e) => {
     if (e.key === 'Escape') {
       // Read the anchor through activePathMenu: a board re-render swaps in a
@@ -430,12 +679,12 @@ function showPathMenu(card, anchor) {
   window.addEventListener('resize', placePathMenu);
   window.addEventListener('scroll', placePathMenu, true);
 
-  activePathMenu = { cardId: card.id, node: menu, anchor, onDocDown, onKey };
+  activePathMenu = { key: target.key, node: menu, anchor, onDocDown, onKey };
   anchor.setAttribute('aria-expanded', 'true');
   placePathMenu();
   // preventScroll matters: a badge near a column edge would otherwise be
   // scrolled into view by the focus, moving the menu off its anchor.
-  openBtn.focus({ preventScroll: true });
+  items[0].focus({ preventScroll: true });
 }
 
 // The 📁 badge: the friendly label collapsed, the full working directory in the
@@ -455,11 +704,12 @@ function projectBadge(card) {
   }, [label, el('span', { class: 'pm-caret', text: '▾' }, [])]);
   // Don't let a press on the badge start a card drag.
   btn.addEventListener('mousedown', (e) => e.stopPropagation());
-  btn.addEventListener('click', (e) => { e.stopPropagation(); showPathMenu(card, btn); });
+  const target = { key: 'card:' + card.id, project: card.project, cardId: card.id };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); showPathMenu(target, btn); });
   // The board re-renders every few seconds, replacing this node. If this card's
   // menu is open, adopt the fresh badge as its anchor so the open highlight and
   // the Escape focus target follow the live element rather than a detached one.
-  if (activePathMenu && activePathMenu.cardId === card.id) {
+  if (activePathMenu && activePathMenu.key === target.key) {
     btn.setAttribute('aria-expanded', 'true');
     activePathMenu.anchor = btn;
   }
@@ -757,6 +1007,26 @@ function cardNode(card, inArchive) {
       (card.skippedBefore.firstAt ? ', session began ' + relTime(card.skippedBefore.firstAt) : ''));
     badges.appendChild(b);
   }
+  // One tag per bookkeeping command this session ran, so /git-review and
+  // /git-commit-message sessions are identifiable at a glance on the board.
+  skipCommandNames(card).forEach((name) => {
+    const meta = CMD_TAGS[name] || {};
+    const detail = skipCommandDetail(card, name);
+    // A pre-card run is a floor, not a total: the marker file keeps one count
+    // across every skipped command in the session, so it can only prove that
+    // this one ran at least once. Say "3+" rather than claim an exact 3.
+    const least = detail.count + (detail.approx ? 1 : 0);
+    const times = detail.approx ? least + '+' : String(least);
+    const b = badge('cmd', [
+      (meta.glyph || CMD_GLYPH_FALLBACK) + ' /' + name,
+      least > 1 || detail.approx ? el('span', { class: 'cmd-n', text: '×' + times }, []) : null,
+    ].filter(Boolean));
+    b.setAttribute('title',
+      (meta.title || 'Ran /' + name + ' in this session') + ' — ran ' +
+      (detail.approx ? 'at least ' : '') + least + (least === 1 ? ' time' : ' times') +
+      (detail.lastAt ? ', last ' + relTime(detail.lastAt) : ''));
+    badges.appendChild(b);
+  });
   const stale = !inArchive && isStale(card);
   if (stale) {
     const b = badge('stale', ['💤 ' + relTime(card.lastActiveAt)]);
@@ -894,6 +1164,48 @@ function columnHead(col, count, index, visibleKeys) {
   ]);
 }
 
+// Options for the command filter, built from the commands actually recorded on
+// the board rather than from a fixed list: the skip list is user-configurable
+// (data/skip-prompts.json), so hard-coding /git-review and /git-commit-message
+// here would go stale the moment someone adds a third. "Any of these" is the
+// catch-all for "show me every session that ran bookkeeping commands".
+//
+// A selected value that no longer matches any card is kept as an option so the
+// select never silently reports a different filter than the one in force.
+function renderCommandFilter() {
+  const sel = document.getElementById('cmdFilter');
+  if (!sel) return;
+  const names = new Set();
+  state.cards.forEach((c) => skipCommandNames(c).forEach((n) => names.add(n)));
+  if (state.cmd && state.cmd !== 'any') names.add(state.cmd);
+  const sorted = Array.from(names).sort();
+
+  const opts = ['<option value="">Any command</option>'];
+  // "Ran any of these" survives an empty board while it is the ACTIVE filter:
+  // dropping it there would leave the select showing "Any command" while the
+  // board was still filtered down to nothing, with no option left to change
+  // back to.
+  if (sorted.length || state.cmd === 'any') {
+    opts.push('<option value="any"' + (state.cmd === 'any' ? ' selected' : '') + '>Ran any of these</option>');
+  }
+  sorted.forEach((n) => {
+    opts.push('<option value="' + escapeHtml(n) + '"' + (n === state.cmd ? ' selected' : '') + '>/' + escapeHtml(n) + '</option>');
+  });
+  setOptions(sel, opts.join(''));
+  // With nothing recorded yet the filter can only ever match everything, so
+  // disable it rather than offer a control that does nothing — but never while
+  // a filter is actually in force, or there would be no way to clear it.
+  sel.disabled = !sorted.length && !state.cmd;
+}
+
+// Does this card pass the command filter? '' means no filter, 'any' means the
+// session ran at least one skip-listed command, anything else names one.
+function matchesCommandFilter(card) {
+  if (!state.cmd) return true;
+  const names = skipCommandNames(card);
+  return state.cmd === 'any' ? names.length > 0 : names.includes(state.cmd);
+}
+
 function render() {
   const board = document.getElementById('boardView');
   // The board is rebuilt wholesale below, so note who holds focus first —
@@ -901,6 +1213,9 @@ function render() {
   const keepNoteFocus = focusedNoteControl();
   board.innerHTML = '';
   board.classList.toggle('fill', state.fillWidth);
+
+  renderProjectFilter();
+  renderCommandFilter();
 
   const visible = state.columns.filter((c) => c.kind !== 'done' || state.showDone);
   const visibleKeys = visible.map((c) => c.key);
@@ -911,10 +1226,11 @@ function render() {
   // 3s re-render then reflects it for free.
   const byCol = {};
   visible.forEach((c) => { byCol[c.key] = []; });
-  let hiddenByLife = 0;
+  let hidden = 0;
   state.cards.forEach((card) => {
     if (!byCol[card.column]) return;
-    if (state.life && sessionState(card) !== state.life) { hiddenByLife++; return; }
+    if (state.life && sessionState(card) !== state.life) { hidden++; return; }
+    if (!matchesCommandFilter(card)) { hidden++; return; }
     byCol[card.column].push(card);
   });
 
@@ -922,8 +1238,8 @@ function render() {
   // say which is which.
   const lifeNote = document.getElementById('lifeNote');
   if (lifeNote) {
-    lifeNote.textContent = state.life && hiddenByLife
-      ? hiddenByLife + ' hidden by filter'
+    lifeNote.textContent = (state.life || state.cmd) && hidden
+      ? hidden + ' hidden by filter'
       : '';
   }
 
@@ -1335,8 +1651,13 @@ lifeFilterEl.value = state.life;
 // render(), not refresh(): the filter is purely client-side, so there is
 // nothing to re-fetch and the board updates instantly.
 lifeFilterEl.addEventListener('change', (e) => { state.life = e.target.value; savePrefs(); render(); });
+const cmdFilterEl = document.getElementById('cmdFilter');
+cmdFilterEl.value = state.cmd;
+cmdFilterEl.addEventListener('change', (e) => { state.cmd = e.target.value; savePrefs(); render(); });
 const showDoneEl = document.getElementById('showDone');
 showDoneEl.checked = state.showDone;
+// render() re-renders the project dropdown too, so its counts follow the toggle
+// without a refetch.
 showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked; savePrefs(); render(); });
 const fillWidthEl = document.getElementById('fillWidth');
 fillWidthEl.checked = state.fillWidth;
@@ -1344,12 +1665,37 @@ fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.check
 document.getElementById('expandAll').addEventListener('click', () => setAllExpanded(true));
 document.getElementById('collapseAll').addEventListener('click', () => setAllExpanded(false));
 document.getElementById('addColumn').addEventListener('click', addColumn);
-document.getElementById('archiveView').addEventListener('click', () => {
-  state.archiveOpen = !state.archiveOpen;
+// Board, Projects and Archive are three states of one view slot, so opening one
+// closes the others rather than stacking two panels on top of each other.
+function setView(which) {
+  state.projectsOpen = which === 'projects';
+  state.archiveOpen = which === 'archive';
+  document.getElementById('boardView').classList.toggle('hidden', which !== 'board');
+  document.getElementById('projectsSection').classList.toggle('hidden', !state.projectsOpen);
   document.getElementById('archiveSection').classList.toggle('hidden', !state.archiveOpen);
-  document.getElementById('boardView').classList.toggle('hidden', state.archiveOpen);
+  document.getElementById('projectsView').textContent = state.projectsOpen ? '← Back to board' : 'Projects…';
   document.getElementById('archiveView').textContent = state.archiveOpen ? '← Back to board' : 'Archive…';
+  // The folder menu hangs off document.body, so switching view would otherwise
+  // leave it floating over a panel its anchor no longer belongs to.
+  closePathMenu();
+  if (state.projectsOpen) refreshProjectRows();
   if (state.archiveOpen) refreshArchive();
+}
+
+document.getElementById('projectsView').addEventListener('click', () => {
+  setView(state.projectsOpen ? 'board' : 'projects');
+});
+document.getElementById('archiveView').addEventListener('click', () => {
+  setView(state.archiveOpen ? 'board' : 'archive');
+});
+
+// Sorting the projects table is client-side over the rows already fetched.
+document.querySelectorAll('.projects-table .th-sort').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.projectSort = btn.dataset.sort;
+    savePrefs();
+    renderProjects();
+  });
 });
 document.getElementById('archiveDone').addEventListener('click', archiveDone);
 

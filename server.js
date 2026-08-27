@@ -148,6 +148,10 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'GET' && pathname === '/api/projects') {
     return sendJson(res, 200, { projects: store.projects() });
   }
+  // Whole-history roll-up (board + archive) behind the Projects view.
+  if (method === 'GET' && pathname === '/api/projects/summary') {
+    return sendJson(res, 200, { projects: store.projectSummary() });
+  }
   if (method === 'GET' && pathname === '/api/archive') {
     return sendJson(res, 200, { cards: store.listArchive() });
   }
@@ -185,6 +189,19 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'GET' && pathname === '/api/resolve') {
     const card = query.project ? store.resolveByProject(query.project) : null;
     return sendJson(res, 200, { card });
+  }
+
+  // A skip-listed bookkeeping command (/git-review, /git-commit-message — see
+  // lib/skip-prompts.js) ran in a session that ALREADY has a card. Those
+  // prompts never create a card, and this endpoint keeps that property: it only
+  // tags a card that is already on the board, and answers 200 either way so the
+  // hook has nothing to handle. The hook posts here without ensureServer(), so
+  // a session whose every prompt is skip-listed still never starts the server.
+  if (method === 'POST' && pathname === '/api/hook/skipped-command') {
+    const body = await readBody(req);
+    if (!body.session) return sendJson(res, 400, { error: 'session required' });
+    const card = store.noteSkipCommand(body.session, body.command);
+    return sendJson(res, 200, { card: card, tagged: !!card });
   }
 
   // Backstop (Stop hook)

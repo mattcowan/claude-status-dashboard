@@ -25,6 +25,13 @@
         <option value="ended">Ended</option>
       </select>
     </span>
+    <span class="control">
+      <label for="cmdFilter">Command</label>
+      <select id="cmdFilter" title="Filter by the bookkeeping slash commands a session ran (/git-review, /git-commit-message). Options appear only for commands actually recorded on the board.">
+        <option value="">Any command</option>
+      </select>
+    </span>
+
     <!-- role=status so changing the filter announces the result: the board is
          rebuilt wholesale, which a screen reader would otherwise not report. -->
     <span class="refresh-note filter-note" id="lifeNote" role="status" aria-live="polite"></span>
@@ -37,6 +44,7 @@
       <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
     </span>
     <button type="button" class="ghost small" id="addColumn">＋ Column</button>
+    <button type="button" class="ghost small" id="projectsView">Projects…</button>
     <button type="button" class="ghost small" id="archiveView">Archive…</button>
     <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
 
@@ -49,6 +57,29 @@
   <main id="boardView" class="board">
     <!-- columns injected by app.js -->
   </main>
+
+  <section id="projectsSection" class="projects-view hidden">
+    <div class="projects-head">
+      <h2>All projects</h2>
+      <p class="projects-sub" id="projectsSub"></p>
+    </div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="All projects">
+      <table class="projects-table" id="projectsTable">
+        <caption class="visually-hidden">Every project a Claude session has run in, with its session counts and most recent session.</caption>
+        <thead>
+          <tr>
+            <th scope="col"><button type="button" class="th-sort" data-sort="name">Project</button></th>
+            <th scope="col"><button type="button" class="th-sort" data-sort="sessions">Sessions</button></th>
+            <th scope="col">Commands</th>
+            <th scope="col">Last session</th>
+            <th scope="col"><button type="button" class="th-sort" data-sort="recent">Last active</button></th>
+            <th scope="col">Links</th>
+          </tr>
+        </thead>
+        <tbody id="projectsBody"></tbody>
+      </table>
+    </div>
+  </section>
 
   <section id="archiveSection" class="archive-view hidden">
     <h2>Archived (done) sessions</h2>

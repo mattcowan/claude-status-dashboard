@@ -241,7 +241,39 @@ sessions can't race); the first non-skipped prompt consumes it and passes the
 count along on the card-creation POST. Markers for sessions that never came back
 are swept after 7 days. The flag is only applied when that POST is what *creates*
 the card — running `/git-commit-message` midway through an established session is
-routine and gets no badge.
+routine and gets no *started late* badge. It does get a command tag, below.
+
+### Command tags — which sessions ran `/git-review` or `/git-commit-message`
+
+Skipped commands still say something useful about a session, even though they
+never earn one a card: which sessions have been through the pre-commit gate, and
+which have had a commit message drafted. Cards carry a tag per command —
+**🔍 `/git-review`**, **✎ `/git-commit-message`**, or **⌘ `/name`** for anything
+else on your skip list — with a **×n** run count and the last run time in the
+tooltip.
+
+The topbar **Command** filter narrows the board to sessions carrying a given tag,
+or to *Ran any of these*. Its options come from the commands actually recorded on
+the board rather than from a fixed list, so a third entry added to
+`data/skip-prompts.json` appears there on its own; with nothing recorded yet, the
+filter is disabled rather than offered as a control that does nothing.
+
+Two paths feed a tag, and the difference matters for the counts:
+
+- **Runs on an established card** are reported live. `hook-user-prompt` posts to
+  `/api/hook/skipped-command` *without* `ensureServer()` — the point of a skipped
+  prompt is that it never starts the dashboard, so when nothing is listening the
+  request fails fast and the tag is simply lost. The endpoint never creates a
+  card either: it tags one already on the board, or does nothing. Recording a tag
+  deliberately does **not** bump `lastActiveAt`, for the same reason a model
+  reading doesn't — drafting a commit message is not the session doing work, and
+  bumping the clock would reorder the board and strip the 💤 badge off a session
+  that really has gone quiet. Only the first run of each command writes a history
+  entry, so a session that drafts six commit messages doesn't bury its own log.
+- **Runs from before the card existed** arrive with the *started late* marker
+  described above. That marker keeps one count across *all* skipped commands in
+  the session, not a tally per command, so it can only prove a given command ran
+  at least once — those tags read **×1+** rather than claiming an exact figure.
 
 ## The `/post-status` command
 
@@ -374,6 +406,38 @@ the data endpoints: the path comes only from the card record (never from the
 request body), the `Origin` must be this dashboard's own loopback origin, and the
 `Host` must be loopback. It can only ever open a folder already on the board.
 
+## The Projects view
+
+**Projects…** in the topbar swaps the board for one row per project folder any
+session has ever run in — the board **and** the archive, which is the point:
+the board can only tell you what is in flight, while this answers what you have
+worked on and when you last touched it. Rows are keyed by normalized path, so
+two sessions that recorded the same folder with a different drive-letter case or
+slash direction fold into one row.
+
+Each row carries:
+
+- the project label, with the same **📁 folder menu** the cards use (Open in
+  Explorer / Open in VS Code / Copy path). "Open in Explorer" is pointed at the
+  project's most recent card, so the path still comes from a stored record and
+  never from the request body;
+- the total session count, split into *on board / done / archived*;
+- the **command tags** for the project, counted by how many *sessions* ran each
+  one (not how many times it ran);
+- the most recent session's headline and where that card sits now;
+- when it was last active;
+- **git links** — the repo (↗) and the branch (⎇), linked on GitHub remotes. The
+  repo URL is taken from the most recent card that *has* one rather than simply
+  the most recent card: a session opened in a sub-folder may never have resolved
+  a remote, and blanking the row over that would drop a working link.
+
+Click **Project**, **Sessions** or **Last active** to sort; the choice is
+remembered. The table scrolls inside its own box (header pinned) so a long list
+or a wide path never makes the page scroll sideways.
+
+Board, Projects and Archive are three states of one view slot — opening one
+closes the others.
+
 ## Platform support
 
 Developed on **Windows 11**; the core board (hooks, CLI, columns, SSE, plans,
@@ -429,6 +493,11 @@ data/                board.json, archive.json, settings.json, usage.json,
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
   moves all done cards into the Archive view for long-term keeping.
+- The count beside each project in the **Project** filter follows that toggle:
+  with Done hidden it counts only the cards actually on screen, so the figure
+  can't overstate the work in flight. A project whose cards are all done stays
+  listed at **(0)** rather than disappearing — otherwise ticking **Show done**
+  would leave nothing to select.
 
 ### Custom columns
 
