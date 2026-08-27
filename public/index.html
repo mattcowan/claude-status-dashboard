@@ -8,83 +8,112 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <a class="skip-link" href="#viewPanels">Skip to the current view</a>
+
+  <!-- Row 1: identity, the view tabs, and the two controls that mean the same
+       thing on every tab. Everything that only acts on the board moved down to
+       .toolbar, so switching to Projects or Archive doesn't leave five board
+       filters sitting above a view they cannot filter. -->
   <header class="topbar">
     <h1><span class="dot"></span> Claude Sessions</h1>
 
-    <span class="control">
-      <label for="projectFilter">Project</label>
-      <select id="projectFilter"><option value="">All projects</option></select>
-    </span>
-
-    <span class="control">
-      <label for="lifeFilter">Session</label>
-      <select id="lifeFilter" title="Filter by session state. “Idle” means no activity for over 4 hours and no end signal — possibly still open, possibly exited without firing its SessionEnd hook.">
-        <option value="">Any state</option>
-        <option value="live">Live</option>
-        <option value="idle">Idle</option>
-        <option value="ended">Ended</option>
-      </select>
-    </span>
-    <span class="control">
-      <label for="cmdFilter">Command</label>
-      <select id="cmdFilter" title="Filter by the bookkeeping slash commands a session ran (/git-review, /git-commit-message). Options appear only for commands actually recorded on the board.">
-        <option value="">Any command</option>
-      </select>
-    </span>
-
-    <!-- role=status so changing the filter announces the result: the board is
-         rebuilt wholesale, which a screen reader would otherwise not report. -->
-    <span class="refresh-note filter-note" id="lifeNote" role="status" aria-live="polite"></span>
-
-    <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
-    <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>
-    <label class="toggle" title="Desktop notification when a card lands in Needs Input or Ready for Review"><input type="checkbox" id="notifyToggle"> 🔔 Notify</label>
-    <span class="btn-group">
-      <button type="button" class="ghost small" id="expandAll" title="Expand all cards">⤢ Expand all</button>
-      <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
-    </span>
-    <button type="button" class="ghost small" id="addColumn">＋ Column</button>
-    <button type="button" class="ghost small" id="projectsView">Projects…</button>
-    <button type="button" class="ghost small" id="archiveView">Archive…</button>
-    <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
+    <div class="tabs" role="tablist" aria-label="Dashboard views">
+      <button type="button" class="tab" role="tab" id="tabBoard"
+              aria-controls="boardView" aria-selected="true">
+        Board <span class="tab-count" id="tabCountBoard"></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tabProjects"
+              aria-controls="projectsSection" aria-selected="false" tabindex="-1">
+        Projects <span class="tab-count" id="tabCountProjects"></span>
+      </button>
+      <button type="button" class="tab" role="tab" id="tabArchive"
+              aria-controls="archiveSection" aria-selected="false" tabindex="-1">
+        Archive <span class="tab-count" id="tabCountArchive"></span>
+      </button>
+    </div>
 
     <span class="spacer"></span>
+
+    <label class="toggle" title="Desktop notification when a card lands in Needs Input or Ready for Review"><input type="checkbox" id="notifyToggle"> 🔔 Notify</label>
     <span class="refresh-note" id="refreshNote"></span>
+
+    <!-- Row 2, inside the same sticky header: board-only controls. Hidden
+         outright on the other tabs. -->
+    <div class="toolbar" id="boardToolbar">
+      <span class="control">
+        <label for="projectFilter">Project</label>
+        <select id="projectFilter"><option value="">All projects</option></select>
+      </span>
+
+      <span class="control">
+        <label for="lifeFilter">Session</label>
+        <select id="lifeFilter" title="Filter by session state. “Idle” means no activity for over 4 hours and no end signal — possibly still open, possibly exited without firing its SessionEnd hook.">
+          <option value="">Any state</option>
+          <option value="live">Live</option>
+          <option value="idle">Idle</option>
+          <option value="ended">Ended</option>
+        </select>
+      </span>
+
+      <span class="control">
+        <label for="cmdFilter">Command</label>
+        <select id="cmdFilter" title="Filter by the bookkeeping slash commands a session ran (/git-review, /git-commit-message). Options appear only for commands actually recorded on the board.">
+          <option value="">Any command</option>
+        </select>
+      </span>
+
+      <!-- role=status so changing the filter announces the result: the board is
+           rebuilt wholesale, which a screen reader would otherwise not report. -->
+      <span class="refresh-note filter-note" id="lifeNote" role="status" aria-live="polite"></span>
+
+      <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
+      <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>
+      <span class="btn-group">
+        <button type="button" class="ghost small" id="expandAll" title="Expand all cards">⤢ Expand all</button>
+        <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
+      </span>
+      <button type="button" class="ghost small" id="addColumn">＋ Column</button>
+      <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
+    </div>
   </header>
 
   <div id="usageStrip" class="usage-strip hidden"></div>
 
-  <main id="boardView" class="board">
-    <!-- columns injected by app.js -->
+  <!-- One <main> holding all three panels, rather than role=tabpanel on <main>
+       itself: that would override the landmark and leave the page with none. -->
+  <main id="viewPanels" class="views" tabindex="-1">
+    <div id="boardView" class="board" role="tabpanel" aria-labelledby="tabBoard" tabindex="0">
+      <!-- columns injected by app.js -->
+    </div>
+
+    <section id="projectsSection" class="projects-view hidden" role="tabpanel" aria-labelledby="tabProjects" tabindex="0">
+      <div class="projects-head">
+        <h2>All projects</h2>
+        <p class="projects-sub" id="projectsSub"></p>
+      </div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="All projects">
+        <table class="projects-table" id="projectsTable">
+          <caption class="visually-hidden">Every project a Claude session has run in, with its session counts and most recent session.</caption>
+          <thead>
+            <tr>
+              <th scope="col"><button type="button" class="th-sort" data-sort="name">Project</button></th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="sessions">Sessions</button></th>
+              <th scope="col">Commands</th>
+              <th scope="col">Last session</th>
+              <th scope="col"><button type="button" class="th-sort" data-sort="recent">Last active</button></th>
+              <th scope="col">Links</th>
+            </tr>
+          </thead>
+          <tbody id="projectsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="archiveSection" class="archive-view hidden" role="tabpanel" aria-labelledby="tabArchive" tabindex="0">
+      <h2>Archived (done) sessions</h2>
+      <div class="archive-list" id="archiveList"></div>
+    </section>
   </main>
-
-  <section id="projectsSection" class="projects-view hidden">
-    <div class="projects-head">
-      <h2>All projects</h2>
-      <p class="projects-sub" id="projectsSub"></p>
-    </div>
-    <div class="table-scroll" tabindex="0" role="region" aria-label="All projects">
-      <table class="projects-table" id="projectsTable">
-        <caption class="visually-hidden">Every project a Claude session has run in, with its session counts and most recent session.</caption>
-        <thead>
-          <tr>
-            <th scope="col"><button type="button" class="th-sort" data-sort="name">Project</button></th>
-            <th scope="col"><button type="button" class="th-sort" data-sort="sessions">Sessions</button></th>
-            <th scope="col">Commands</th>
-            <th scope="col">Last session</th>
-            <th scope="col"><button type="button" class="th-sort" data-sort="recent">Last active</button></th>
-            <th scope="col">Links</th>
-          </tr>
-        </thead>
-        <tbody id="projectsBody"></tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="archiveSection" class="archive-view hidden">
-    <h2>Archived (done) sessions</h2>
-    <div class="archive-list" id="archiveList"></div>
-  </section>
 
   <script src="/app.js"></script>
 </body>

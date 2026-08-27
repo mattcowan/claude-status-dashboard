@@ -140,6 +140,9 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, {
       cards: store.listCards(query.project || null),
       columns: store.listColumns(),
+      // Whole-store totals for the view tabs, so the Archive and Projects tabs
+      // can show a count without the board fetching either view.
+      counts: store.counts(),
     });
   }
   if (method === 'GET' && pathname === '/api/columns') {
@@ -201,7 +204,14 @@ async function handleApi(req, res, pathname, query) {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
     const card = store.noteSkipCommand(body.session, body.command);
-    return sendJson(res, 200, { card: card, tagged: !!card });
+    // Still 200 either way — the hook must never fail a prompt over a tag — but
+    // `reason` separates the two ways nothing happened. "no-card" is the normal
+    // case (a session that has not earned a card); "rejected" means the name
+    // was not command-shaped, which is a configuration mistake worth being able
+    // to see rather than a silent no-op.
+    const reason = card ? null
+      : (store.getCard(body.session) ? 'rejected' : 'no-card');
+    return sendJson(res, 200, { card: card, tagged: !!card, reason: reason });
   }
 
   // Backstop (Stop hook)

@@ -252,11 +252,19 @@ which have had a commit message drafted. Cards carry a tag per command —
 else on your skip list — with a **×n** run count and the last run time in the
 tooltip.
 
-The topbar **Command** filter narrows the board to sessions carrying a given tag,
-or to *Ran any of these*. Its options come from the commands actually recorded on
-the board rather than from a fixed list, so a third entry added to
+The **Command** filter narrows the board to sessions carrying a given tag, or to
+*Ran any of these*. Its options come from the commands actually recorded on the
+board rather than from a fixed list, so a third entry added to
 `data/skip-prompts.json` appears there on its own; with nothing recorded yet, the
 filter is disabled rather than offered as a control that does nothing.
+
+A name only gets a tag if it looks like a slash command: up to 60 characters of
+letters, digits and `. _ - : + /`, starting with a letter or digit. That covers
+the shapes commands really take (`git-review`, `plugin:skill`,
+`frontend/deploy`) and keeps whitespace, markup and pasted text out of
+`board.json`, where these names are stored as keys. Both recording paths apply
+the same rule, so a name cannot work before the card exists and then silently
+stop working afterwards.
 
 Two paths feed a tag, and the difference matters for the counts:
 
@@ -406,9 +414,35 @@ the data endpoints: the path comes only from the card record (never from the
 request body), the `Origin` must be this dashboard's own loopback origin, and the
 `Host` must be loopback. It can only ever open a folder already on the board.
 
+## Views: Board, Projects, Archive
+
+The three views are tabs in the header, not three panels that hide each other.
+It is a real `role="tablist"`, so it behaves the way a tab set is supposed to:
+
+- **Arrow keys** move between tabs and wrap; **Home** and **End** jump to the
+  first and last. Activation follows focus, so arrowing to a tab opens it.
+- **Tab** leaves the group in one press. Only the selected tab is in the page's
+  tab order (a roving `tabindex`), so the tablist is one stop rather than three.
+- A screen reader announces "Projects, tab, 2 of 3" and ties each panel to the
+  tab that owns it (`aria-controls` and `aria-labelledby`). `aria-selected` says
+  which view you are in, so the answer does not depend on seeing a colour.
+- Each tab carries a count. **Board** is the number of cards actually rendered —
+  after *Show done* and both filters — while **Projects** and **Archive** are
+  whole-store totals that ride along on the board fetch, so neither view has to
+  be open for its count to stay current.
+
+The header is two rows. The top row holds the tabs and the controls that mean
+the same thing everywhere (**Notify**, the refresh clock). The second row holds
+the board filters, and it is hidden outright on the Projects and Archive tabs
+rather than left sitting above a view it cannot filter. Both rows are inside the
+one sticky header, so the filters travel with the tabs.
+
+A **skip link** (first Tab stop) jumps past the whole header to the current
+panel. Your last tab is remembered.
+
 ## The Projects view
 
-**Projects…** in the topbar swaps the board for one row per project folder any
+The **Projects** tab shows one row per project folder any
 session has ever run in — the board **and** the archive, which is the point:
 the board can only tell you what is in flight, while this answers what you have
 worked on and when you last touched it. Rows are keyed by normalized path, so
@@ -433,10 +467,8 @@ Each row carries:
 
 Click **Project**, **Sessions** or **Last active** to sort; the choice is
 remembered. The table scrolls inside its own box (header pinned) so a long list
-or a wide path never makes the page scroll sideways.
-
-Board, Projects and Archive are three states of one view slot — opening one
-closes the others.
+or a wide path never makes the page scroll sideways. Hover the **Last active**
+cell for the exact times, including when the project's first session ran.
 
 ## Platform support
 
@@ -493,11 +525,16 @@ data/                board.json, archive.json, settings.json, usage.json,
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
   moves all done cards into the Archive view for long-term keeping.
-- The count beside each project in the **Project** filter follows that toggle:
-  with Done hidden it counts only the cards actually on screen, so the figure
-  can't overstate the work in flight. A project whose cards are all done stays
-  listed at **(0)** rather than disappearing — otherwise ticking **Show done**
-  would leave nothing to select.
+- The count beside each project in the **Project** filter is that project's
+  cards on the board, and it follows the **Show done** toggle: with Done hidden
+  it stops counting finished cards, which used to make the dropdown overstate
+  the work in flight. It tracks that toggle and nothing else — the *Session* and
+  *Command* filters are applied to the cards already fetched, and once a project
+  is selected those are only that project's cards, so there is nothing to
+  compute the other projects' filtered counts from. The **Board** tab's count is
+  the post-filter figure. A project whose cards are all done stays listed at
+  **(0)** rather than disappearing — otherwise ticking **Show done** would leave
+  nothing to select.
 
 ### Custom columns
 

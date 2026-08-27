@@ -8,8 +8,8 @@ const state = {
   life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
   cmd: '',       // '' | 'any' | '<command>' — client-side skip-command filter (persisted)
   showDone: false,
-  archiveOpen: false,
-  projectsOpen: false,
+  view: 'board',            // 'board' | 'projects' | 'archive' (persisted)
+  counts: null,             // whole-store totals from /api/board, for the tab labels
   projectRows: [],          // last /api/projects/summary payload
   projectSort: 'recent',    // 'recent' | 'name' | 'sessions'
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
@@ -48,16 +48,25 @@ function loadPrefs() {
     // the filter note explains.
     state.cmd = typeof p.cmd === 'string' ? p.cmd.slice(0, 60) : '';
     state.projectSort = ['recent', 'name', 'sessions'].includes(p.projectSort) ? p.projectSort : 'recent';
+    // Same guard as the filters: an unknown stored value must not leave the
+    // page with no panel showing and no obvious way back.
+    state.view = ['board', 'projects', 'archive'].includes(p.view) ? p.view : 'board';
     state.expanded = new Set(Array.isArray(p.expanded) ? p.expanded : []);
   } catch (_) { /* storage unavailable — keep defaults */ }
 }
 
 function savePrefs() {
   try {
-    // Prune expanded ids to cards currently on the board so it can't grow unbounded.
+    // Prune expanded ids to cards currently on the board so it can't grow
+    // unbounded — but only once a board has actually been loaded. Before the
+    // first fetch state.cards is empty, and pruning against it would throw away
+    // every id the last session saved. setView() persists at boot, so this is
+    // reachable.
     const onBoard = new Set(state.cards.map((c) => c.id));
-    const expanded = Array.from(state.expanded).filter((id) => onBoard.has(id));
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, expanded }));
+    const expanded = state.cards.length
+      ? Array.from(state.expanded).filter((id) => onBoard.has(id))
+      : Array.from(state.expanded);
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, view: state.view, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -143,7 +152,12 @@ function skipCommandDetail(card, name) {
   return {
     count: live ? (Number(live.count) || 1) : 0,
     approx: before,
-    lastAt: live ? live.lastAt : (card.skippedBefore && card.skippedBefore.firstAt) || null,
+    // Two different facts, so they are two different fields. A live record
+    // knows when the command last ran; skippedBefore only knows when the
+    // session's first skipped turn was, which is not the same thing and must
+    // not be labelled "last".
+    lastAt: live ? live.lastAt : null,
+    sessionBeganAt: (card.skippedBefore && card.skippedBefore.firstAt) || null,
   };
 }
 
@@ -305,13 +319,16 @@ async function refresh() {
   const data = (await api('GET', '/api/board' + q)).json;
   state.cards = (data && data.cards) || [];
   state.columns = (data && data.columns) || [];
+  // Whole-store totals for the tab labels. Kept on a failed fetch rather than
+  // zeroed, so a hiccup doesn't blink the counts to nothing.
+  if (data && data.counts) state.counts = data.counts;
   notifyColumnChanges();
   render();
   refreshUsage(); // fire-and-forget; strip renders when it lands
   await refreshProjects();
   document.getElementById('refreshNote').textContent = 'updated ' + new Date().toLocaleTimeString();
-  if (state.archiveOpen) refreshArchive();
-  if (state.projectsOpen) refreshProjectRows();
+  if (state.view === 'archive') refreshArchive();
+  if (state.view === 'projects') refreshProjectRows();
 }
 
 async function refreshProjects() {
@@ -320,11 +337,20 @@ async function refreshProjects() {
   renderProjectFilter();
 }
 
-// The count in parentheses must match what the board is actually showing, so it
-// tracks the "Show done" toggle: with Done hidden, a project's finished cards
-// are not on screen and counting them made the dropdown overstate the work in
-// flight. Rendered separately from the fetch because flipping that toggle is a
-// purely client-side re-render with nothing to re-request.
+// The count in parentheses is a project's cards on the board, tracking the
+// "Show done" toggle and nothing else: with Done hidden, a project's finished
+// cards are not on screen and counting them made the dropdown overstate the
+// work in flight.
+//
+// It deliberately does NOT account for the Session or Command filters. Those
+// are applied client-side to the cards currently fetched, which — once a
+// project is selected — is only that one project's cards, so there is nothing
+// to compute the other projects' filtered counts from. The Board tab's own
+// count is the post-filter figure; this one answers "how much is on the board
+// for this project", which is what you need when choosing what to switch to.
+//
+// Rendered separately from the fetch because flipping Show done is a purely
+// client-side re-render with nothing to re-request.
 function renderProjectFilter() {
   const sel = document.getElementById('projectFilter');
   if (!sel) return;
@@ -501,7 +527,16 @@ function projectRowNode(row) {
     ].filter(Boolean)),
     cmds,
     lastCell,
-    el('td', { class: 'p-when', title: row.lastActiveAt || '' }, [
+    el('td', {
+      class: 'p-when',
+      // firstSeenAt earns its place here: the span between the first and last
+      // session is what says whether a project is a long-running thread or a
+      // single afternoon, and the cell has room for it in a tooltip.
+      title: [
+        row.lastActiveAt ? 'Last active ' + new Date(row.lastActiveAt).toLocaleString() : '',
+        row.firstSeenAt ? 'First session ' + new Date(row.firstSeenAt).toLocaleString() : '',
+      ].filter(Boolean).join('\n'),
+    }, [
       relTime(row.lastActiveAt),
       row.lastActiveAt ? el('span', { class: 'p-when-abs', text: dateClock(row.lastActiveAt) }, []) : null,
     ].filter(Boolean)),
@@ -1024,7 +1059,9 @@ function cardNode(card, inArchive) {
     b.setAttribute('title',
       (meta.title || 'Ran /' + name + ' in this session') + ' — ran ' +
       (detail.approx ? 'at least ' : '') + least + (least === 1 ? ' time' : ' times') +
-      (detail.lastAt ? ', last ' + relTime(detail.lastAt) : ''));
+      (detail.lastAt ? ', last ' + relTime(detail.lastAt)
+        : detail.sessionBeganAt ? ', before the card existed (session began ' + relTime(detail.sessionBeganAt) + ')'
+        : ''));
     badges.appendChild(b);
   });
   const stale = !inArchive && isStale(card);
@@ -1242,6 +1279,11 @@ function render() {
       ? hidden + ' hidden by filter'
       : '';
   }
+
+  // The Board tab's count is this figure — cards actually rendered, after Show
+  // done and both filters. That is also why the project dropdown's own count
+  // makes the narrower claim it does: it tracks Show done only.
+  renderTabCounts(visible.reduce((n, c) => n + byCol[c.key].length, 0));
 
   visible.forEach((col, index) => {
     const colEl = el('div', { class: 'column' + (col.kind === 'custom' ? ' custom' : ''), 'data-col': col.key }, []);
@@ -1665,29 +1707,89 @@ fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.check
 document.getElementById('expandAll').addEventListener('click', () => setAllExpanded(true));
 document.getElementById('collapseAll').addEventListener('click', () => setAllExpanded(false));
 document.getElementById('addColumn').addEventListener('click', addColumn);
-// Board, Projects and Archive are three states of one view slot, so opening one
-// closes the others rather than stacking two panels on top of each other.
+// ---------- view tabs ----------
+//
+// Board, Projects and Archive are three panels in one slot. This is a real
+// tablist rather than three buttons that toggle a class, which buys three
+// things a plain button row does not give you:
+//
+//   * a screen reader announces "Projects, tab, 2 of 3" and knows the panel
+//     below belongs to it (aria-controls / aria-labelledby),
+//   * arrow keys move between tabs and Tab leaves the group entirely, because
+//     only the selected tab is in the page's tab order (roving tabindex),
+//   * aria-selected states which view you are looking at, so the answer does
+//     not depend on noticing a colour.
+//
+// Activation follows focus (the APG default): arrowing to a tab selects it.
+// The cost of a wrong guess is one local fetch, which is not the "significant
+// cost" that would call for manual activation.
+const TABS = [
+  { view: 'board', tab: 'tabBoard', panel: 'boardView' },
+  { view: 'projects', tab: 'tabProjects', panel: 'projectsSection' },
+  { view: 'archive', tab: 'tabArchive', panel: 'archiveSection' },
+];
+
 function setView(which) {
-  state.projectsOpen = which === 'projects';
-  state.archiveOpen = which === 'archive';
-  document.getElementById('boardView').classList.toggle('hidden', which !== 'board');
-  document.getElementById('projectsSection').classList.toggle('hidden', !state.projectsOpen);
-  document.getElementById('archiveSection').classList.toggle('hidden', !state.archiveOpen);
-  document.getElementById('projectsView').textContent = state.projectsOpen ? '← Back to board' : 'Projects…';
-  document.getElementById('archiveView').textContent = state.archiveOpen ? '← Back to board' : 'Archive…';
+  const next = TABS.some((t) => t.view === which) ? which : 'board';
+  state.view = next;
+
+  TABS.forEach((t) => {
+    const tab = document.getElementById(t.tab);
+    const on = t.view === next;
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    // Roving tabindex: exactly one tab is reachable with Tab, so the tablist
+    // is one stop on the way through the page rather than three.
+    tab.tabIndex = on ? 0 : -1;
+    document.getElementById(t.panel).classList.toggle('hidden', !on);
+  });
+
+  // The board filters act on the board and nothing else, so they go away with
+  // it rather than sitting above a view they cannot filter.
+  document.getElementById('boardToolbar').classList.toggle('hidden', next !== 'board');
+
   // The folder menu hangs off document.body, so switching view would otherwise
   // leave it floating over a panel its anchor no longer belongs to.
   closePathMenu();
-  if (state.projectsOpen) refreshProjectRows();
-  if (state.archiveOpen) refreshArchive();
+  savePrefs();
+
+  if (next === 'projects') refreshProjectRows();
+  if (next === 'archive') refreshArchive();
 }
 
-document.getElementById('projectsView').addEventListener('click', () => {
-  setView(state.projectsOpen ? 'board' : 'projects');
+// The count beside each tab label. Board is the number of cards actually
+// rendered — after Show done and both filters — because that is what the tab
+// leads to; Projects and Archive are whole-store totals from /api/board, so
+// they stay live without either view being fetched.
+function renderTabCounts(boardVisible) {
+  const put = (id, n) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = (n == null) ? '' : String(n);
+  };
+  put('tabCountBoard', boardVisible);
+  put('tabCountProjects', state.counts ? state.counts.projects : null);
+  put('tabCountArchive', state.counts ? state.counts.archive : null);
+}
+
+TABS.forEach((t) => {
+  document.getElementById(t.tab).addEventListener('click', () => setView(t.view));
 });
-document.getElementById('archiveView').addEventListener('click', () => {
-  setView(state.archiveOpen ? 'board' : 'archive');
+
+document.querySelector('.tabs').addEventListener('keydown', (e) => {
+  const move = { ArrowRight: 1, ArrowLeft: -1, Home: 'first', End: 'last' }[e.key];
+  if (!move) return;
+  e.preventDefault();
+  // Derive the starting point from focus, not from state: they agree under
+  // activation-follows-focus, but focus is the thing the key is acting on.
+  const at = TABS.findIndex((t) => document.getElementById(t.tab) === document.activeElement);
+  const from = at === -1 ? TABS.findIndex((t) => t.view === state.view) : at;
+  const to = move === 'first' ? 0
+    : move === 'last' ? TABS.length - 1
+    : (from + move + TABS.length) % TABS.length;
+  setView(TABS[to].view);
+  document.getElementById(TABS[to].tab).focus();
 });
+
+setView(state.view);
 
 // Sorting the projects table is client-side over the rows already fetched.
 document.querySelectorAll('.projects-table .th-sort').forEach((btn) => {
@@ -1743,7 +1845,10 @@ function onBoardChanged() {
   if (sseRefreshTimer) return;
   sseRefreshTimer = setTimeout(() => {
     sseRefreshTimer = null;
-    if (!state.archiveOpen) refresh().catch(() => {});
+    // Unconditional now that refresh() drives whichever panel is open: skipping
+    // it on the Archive tab used to leave that view frozen while the board it
+    // was hiding stayed current.
+    refresh().catch(() => {});
   }, 300);
 }
 
@@ -1834,7 +1939,7 @@ function schedulePoll() {
   setTimeout(async () => {
     // A failed refresh (server restarting, network hiccup) must never break
     // the polling chain — that's the whole point of the fallback.
-    try { if (!state.archiveOpen) await refresh(); } catch (_) { /* retry next tick */ }
+    try { await refresh(); } catch (_) { /* retry next tick */ }
     schedulePoll();
   }, sseCovered() ? 15000 : 3000);
 }

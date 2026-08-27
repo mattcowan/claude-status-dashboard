@@ -24,6 +24,7 @@ const assert = require('node:assert');
 const { Store } = require('../lib/store');
 
 const ALPHA = 'C:\\Sites\\alpha';
+const BETA = 'C:\\Sites\\beta';
 
 function card(over) {
   return Object.assign({
@@ -201,4 +202,92 @@ test('noteSkipCommand() rejects a name that is not slash-command shaped', () => 
   // The real names must still pass.
   assert.ok(s.noteSkipCommand('a', 'git-commit-message'));
   assert.ok(s.noteSkipCommand('a', 'git-review'));
+});
+
+// ---------- regressions from the 2026-08-26 review ----------
+
+test('projectSummary() takes repoUrl from the NEWEST card that has one', () => {
+  const older = { id: 'old', repoUrl: 'https://github.com/me/old-name', lastActiveAt: '2026-08-01T00:00:00.000Z' };
+  const newer = { id: 'new', repoUrl: 'https://github.com/me/new-name', lastActiveAt: '2026-08-09T00:00:00.000Z' };
+  // Both insertion orders, because the bug this pins was Object.values() order
+  // leaking into the result: first-one-wins gave the OLDEST card's URL, so a
+  // renamed repo left the row linking to a dead URL while gitBranch came from
+  // the newest card (old-repo/tree/current-branch).
+  for (const order of [[older, newer], [newer, older]]) {
+    const s = fixture(order.map((o) => card(o)));
+    assert.equal(s.projectSummary()[0].repoUrl, 'https://github.com/me/new-name',
+      'insertion order must not decide which URL wins');
+  }
+});
+
+test('projectSummary() still keeps an older URL when the newest card has none', () => {
+  const s = fixture([
+    card({ id: 'old', repoUrl: 'https://github.com/me/alpha', lastActiveAt: '2026-08-01T00:00:00.000Z' }),
+    card({ id: 'new', repoUrl: null, lastActiveAt: '2026-08-09T00:00:00.000Z' }),
+  ]);
+  assert.equal(s.projectSummary()[0].repoUrl, 'https://github.com/me/alpha',
+    'a sub-folder session that never resolved a remote must not blank the link');
+});
+
+test('both recording paths accept the same command names', () => {
+  // The two paths used to disagree: noteSkipCommand() rejected anything outside
+  // [A-Za-z0-9._:-] while noteSkippedBefore() accepted any non-empty string, so
+  // whether a command got a tag depended on when in the session it ran.
+  const ok = ['git-review', 'plugin:skill', 'frontend/deploy', 'a.b_c', 'x'];
+  const bad = ['../../etc/passwd', 'has space', '<script>', '-leading', 'x'.repeat(61), '', '/'];
+
+  for (const name of ok) {
+    const s = fixture([card({ id: 'a' })]);
+    assert.ok(s.noteSkipCommand('a', name), 'live path should accept ' + JSON.stringify(name));
+    s.noteSkippedBefore('a', { count: 1, commands: [name] });
+    assert.deepEqual(s.board.cards.a.skippedBefore.commands, [name],
+      'pre-card path should accept ' + JSON.stringify(name));
+  }
+  for (const name of bad) {
+    const s = fixture([card({ id: 'a' })]);
+    assert.equal(s.noteSkipCommand('a', name), null, 'live path should reject ' + JSON.stringify(name));
+    s.noteSkippedBefore('a', { count: 1, commands: [name] });
+    assert.deepEqual(s.board.cards.a.skippedBefore.commands, [],
+      'pre-card path should reject ' + JSON.stringify(name));
+  }
+});
+
+test('projects() and projectSummary() agree on how many distinct folders exist', () => {
+  const cards = [
+    card({ id: 'a', project: ALPHA, lastActiveAt: '2026-08-01T00:00:00.000Z' }),
+    card({ id: 'b', project: 'c:/Sites/alpha/', lastActiveAt: '2026-08-09T00:00:00.000Z' }),
+  ];
+  const s = fixture(cards);
+  assert.equal(s.projects().length, s.projectSummary().length,
+    'the topbar filter and the Projects table must not disagree on folder count');
+  assert.equal(s.projects()[0].count, 2);
+  assert.equal(s.projects()[0].project, 'c:/Sites/alpha/',
+    'the newest spelling is offered, matching projectSummary()');
+});
+
+test('listCards() filters on the normalized path', () => {
+  const s = fixture([
+    card({ id: 'a', project: ALPHA }),
+    card({ id: 'b', project: 'c:/Sites/alpha/' }),
+    card({ id: 'c', project: BETA }),
+  ]);
+  // A filter value captured under either spelling must still find both cards.
+  assert.equal(s.listCards(ALPHA).length, 2);
+  assert.equal(s.listCards('c:/Sites/alpha/').length, 2);
+  assert.equal(s.listCards(BETA).length, 1);
+  assert.equal(s.listCards(null).length, 3);
+});
+
+test('counts() reports the totals the view tabs show', () => {
+  const s = fixture(
+    [card({ id: 'a', column: 'working' }),
+      card({ id: 'b', column: 'done' }),
+      card({ id: 'c', project: BETA })],
+    [card({ id: 'z', project: 'c:/Sites/BETA' })]
+  );
+  const c = s.counts();
+  assert.equal(c.board, 3);
+  assert.equal(c.done, 1);
+  assert.equal(c.archive, 1);
+  assert.equal(c.projects, 2, 'distinct folders across board and archive, normalized');
 });

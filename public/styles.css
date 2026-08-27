@@ -77,6 +77,84 @@ header.topbar {
 }
 .spacer { flex: 1 1 auto; }
 
+/* The header is now two rows of controls deep, so give keyboard users a way
+   past it (WCAG 2.4.1). Off-screen until focused, then parked over the header. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: 0 0 8px 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent-plain);
+  text-decoration: none;
+}
+.skip-link:focus { left: 0; }
+/* Focused programmatically by the skip link; it is not a control, so it should
+   not draw a focus ring of its own. */
+.views:focus { outline: none; }
+
+/* View tabs — a segmented control rather than an underline, because the topbar
+   is centre-aligned flex and an underline would have nothing to sit on. */
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); border-color: transparent; }
+.tab[aria-selected="true"] {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+/* :focus-visible only — clicking a tab shouldn't leave a ring behind, but
+   arrowing between them must show where focus is. */
+.tab:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+.tab-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+.tab[aria-selected="true"] .tab-count { color: var(--accent-plain); }
+.tab-count:empty { display: none; }
+
+/* Second header row: the controls that only act on the board. Inside the
+   sticky header rather than below it, so the filters travel with the tabs;
+   flex-basis 100% forces the break, and the negative margins let it span the
+   header's own padding. */
+.toolbar {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 4px -20px -14px;
+  padding: 11px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
 .control {
   display: inline-flex;
   align-items: center;
@@ -406,7 +484,11 @@ a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-
    Teal keeps them distinct from the purple "started late" flag they often sit
    beside — the two say different things about the same commands. */
 .badge.cmd { color: var(--cmd-text); border-color: rgba(36,184,196,.38); background: rgba(36,184,196,.12); }
-.badge.cmd .cmd-n { color: var(--muted-2); font-size: 10px; margin-left: 4px; }
+/* --muted, not --muted-2, and only here: every other --muted-2 badge sits on
+   the untinted panel, where it passes. Over .badge.cmd's teal tint the darker
+   token measures 4.00 on a card and 4.40 in the Projects table — both under
+   4.5:1 for 10px text (WCAG 1.4.3). --muted clears it at 5.10 and 5.61. */
+.badge.cmd .cmd-n { color: var(--muted); font-size: 10px; margin-left: 4px; }
 .badge.branch { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 a.badge.branch { color: var(--accent-plain); text-decoration: none; }
 a.badge.branch:hover { border-color: var(--accent-plain); background: var(--panel-2); }

@@ -199,8 +199,16 @@ async function hookUserPrompt() {
     // marker file record() just wrote is the durable half — if this session
     // goes on to real work, the tag arrives with skippedBefore instead.
     if (session) {
-      await request('POST', '/api/hook/skipped-command',
+      const r = await request('POST', '/api/hook/skipped-command',
         { session: session, command: skipped, project: cwd }, 1500);
+      // "no card yet" is the normal answer and says nothing. "rejected" means
+      // the skip list holds a name this can't store, which is a configuration
+      // mistake the user should be able to find — stderr, because a hook must
+      // still exit 0 and must never write to stdout.
+      if (r.json && r.json.reason === 'rejected') {
+        process.stderr.write('[status] /' + skipped + ' is on the skip list but is not a ' +
+          'storable command name, so the session was not tagged.\n');
+      }
     }
     process.exit(0);
   }
