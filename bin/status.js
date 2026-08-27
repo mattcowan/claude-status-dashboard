@@ -191,6 +191,25 @@ async function hookUserPrompt() {
   const skipped = skipPrompts.match(input.prompt);
   if (skipped) {
     if (session) skipPrompts.record(session, skipped);
+    // Tell the dashboard, so a session that already HAS a card gets tagged with
+    // the command it just ran. Posted directly rather than through
+    // ensureServer(): the whole point of this branch is that a bookkeeping
+    // prompt must never start the server, so when nothing is listening the
+    // request fails fast on ECONNREFUSED and the tag is simply lost. The
+    // marker file record() just wrote is the durable half — if this session
+    // goes on to real work, the tag arrives with skippedBefore instead.
+    if (session) {
+      const r = await request('POST', '/api/hook/skipped-command',
+        { session: session, command: skipped, project: cwd }, 1500);
+      // "no card yet" is the normal answer and says nothing. "rejected" means
+      // the skip list holds a name this can't store, which is a configuration
+      // mistake the user should be able to find — stderr, because a hook must
+      // still exit 0 and must never write to stdout.
+      if (r.json && r.json.reason === 'rejected') {
+        process.stderr.write('[status] /' + skipped + ' is on the skip list but is not a ' +
+          'storable command name, so the session was not tagged.\n');
+      }
+    }
     process.exit(0);
   }
 

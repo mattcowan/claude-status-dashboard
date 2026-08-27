@@ -241,7 +241,47 @@ sessions can't race); the first non-skipped prompt consumes it and passes the
 count along on the card-creation POST. Markers for sessions that never came back
 are swept after 7 days. The flag is only applied when that POST is what *creates*
 the card — running `/git-commit-message` midway through an established session is
-routine and gets no badge.
+routine and gets no *started late* badge. It does get a command tag, below.
+
+### Command tags — which sessions ran `/git-review` or `/git-commit-message`
+
+Skipped commands still say something useful about a session, even though they
+never earn one a card: which sessions have been through the pre-commit gate, and
+which have had a commit message drafted. Cards carry a tag per command —
+**🔍 `/git-review`**, **✎ `/git-commit-message`**, or **⌘ `/name`** for anything
+else on your skip list — with a **×n** run count and the last run time in the
+tooltip.
+
+The **Command** filter narrows the board to sessions carrying a given tag, or to
+*Ran any of these*. Its options come from the commands actually recorded on the
+board rather than from a fixed list, so a third entry added to
+`data/skip-prompts.json` appears there on its own; with nothing recorded yet, the
+filter is disabled rather than offered as a control that does nothing.
+
+A name only gets a tag if it looks like a slash command: up to 60 characters of
+letters, digits and `. _ - : + /`, starting with a letter or digit. That covers
+the shapes commands really take (`git-review`, `plugin:skill`,
+`frontend/deploy`) and keeps whitespace, markup and pasted text out of
+`board.json`, where these names are stored as keys. Both recording paths apply
+the same rule, so a name cannot work before the card exists and then silently
+stop working afterwards.
+
+Two paths feed a tag, and the difference matters for the counts:
+
+- **Runs on an established card** are reported live. `hook-user-prompt` posts to
+  `/api/hook/skipped-command` *without* `ensureServer()` — the point of a skipped
+  prompt is that it never starts the dashboard, so when nothing is listening the
+  request fails fast and the tag is simply lost. The endpoint never creates a
+  card either: it tags one already on the board, or does nothing. Recording a tag
+  deliberately does **not** bump `lastActiveAt`, for the same reason a model
+  reading doesn't — drafting a commit message is not the session doing work, and
+  bumping the clock would reorder the board and strip the 💤 badge off a session
+  that really has gone quiet. Only the first run of each command writes a history
+  entry, so a session that drafts six commit messages doesn't bury its own log.
+- **Runs from before the card existed** arrive with the *started late* marker
+  described above. That marker keeps one count across *all* skipped commands in
+  the session, not a tally per command, so it can only prove a given command ran
+  at least once — those tags read **×1+** rather than claiming an exact figure.
 
 ## The `/post-status` command
 
@@ -369,10 +409,85 @@ plus three actions:
   at.
 - **📋 Copy path** — the working directory to the clipboard.
 
-The open-folder endpoint launches a process, so it is gated more tightly than
-the data endpoints: the path comes only from the card record (never from the
-request body), the `Origin` must be this dashboard's own loopback origin, and the
-`Host` must be loopback. It can only ever open a folder already on the board.
+**Every write is gated.** Any request that is not a `GET` must carry an `Origin`
+this dashboard recognizes (its own loopback origin, or none at all) *and* a
+loopback `Host`. The API has no auth — it is a local board — so those two
+headers are what stands between it and a page on another origin. A browser
+cannot forge `Origin`; a DNS-rebinding page resolving to `127.0.0.1` still sends
+its own name in `Host`. Two callers get through: this dashboard's own page, and
+a non-browser client (the CLI and the hooks), which sends no `Origin` at all.
+
+The gate is one check at the top of the API router rather than a condition
+repeated per route, so a new write endpoint is covered the day it is added.
+It lives in [`lib/origin.js`](lib/origin.js) as a pure function of the two
+headers, so [`test/origin.test.js`](test/origin.test.js) can exercise it without
+standing a server up.
+That matters, because it started life guarding only open-folder — on the
+reasoning that launching a process deserved more care than "mutating board
+data" — and the data endpoints turned out to include `DELETE /api/cards/:id`
+and `/api/archive-done`. A cross-origin form `POST` reaches those without a
+preflight, because a "simple request" with `Content-Type: text/plain` still
+parses as JSON. Losing a card is not less bad than opening a folder.
+
+open-folder keeps its extra restriction on top of the gate: the path comes only
+from the card record, never from the request body, so it can only ever open a
+folder already on the board.
+
+## Views: Board, Projects, Archive
+
+The three views are tabs in the header, not three panels that hide each other.
+It is a real `role="tablist"`, so it behaves the way a tab set is supposed to:
+
+- **Arrow keys** move between tabs and wrap; **Home** and **End** jump to the
+  first and last. Activation follows focus, so arrowing to a tab opens it.
+- **Tab** leaves the group in one press. Only the selected tab is in the page's
+  tab order (a roving `tabindex`), so the tablist is one stop rather than three.
+- A screen reader announces "Projects, tab, 2 of 3" and ties each panel to the
+  tab that owns it (`aria-controls` and `aria-labelledby`). `aria-selected` says
+  which view you are in, so the answer does not depend on seeing a colour.
+- Each tab carries a count. **Board** is the number of cards actually rendered —
+  after *Show done* and both filters — while **Projects** and **Archive** are
+  whole-store totals that ride along on the board fetch, so neither view has to
+  be open for its count to stay current.
+
+The header is two rows. The top row holds the tabs and the controls that mean
+the same thing everywhere (**Notify**, the refresh clock). The second row holds
+the board filters, and it is hidden outright on the Projects and Archive tabs
+rather than left sitting above a view it cannot filter. Both rows are inside the
+one sticky header, so the filters travel with the tabs.
+
+A **skip link** (first Tab stop) jumps past the whole header to the current
+panel. Your last tab is remembered.
+
+## The Projects view
+
+The **Projects** tab shows one row per project folder any
+session has ever run in — the board **and** the archive, which is the point:
+the board can only tell you what is in flight, while this answers what you have
+worked on and when you last touched it. Rows are keyed by normalized path, so
+two sessions that recorded the same folder with a different drive-letter case or
+slash direction fold into one row.
+
+Each row carries:
+
+- the project label, with the same **📁 folder menu** the cards use (Open in
+  Explorer / Open in VS Code / Copy path). "Open in Explorer" is pointed at the
+  project's most recent card, so the path still comes from a stored record and
+  never from the request body;
+- the total session count, split into *on board / done / archived*;
+- the **command tags** for the project, counted by how many *sessions* ran each
+  one (not how many times it ran);
+- the most recent session's headline and where that card sits now;
+- when it was last active;
+- **git links** — the repo (↗) and the branch (⎇), linked on GitHub remotes. The
+  repo URL is taken from the most recent card that *has* one rather than simply
+  the most recent card: a session opened in a sub-folder may never have resolved
+  a remote, and blanking the row over that would drop a working link.
+
+Click **Project**, **Sessions** or **Last active** to sort; the choice is
+remembered. The table scrolls inside its own box (header pinned) so a long list
+or a wide path never makes the page scroll sideways. Hover the **Last active**
+cell for the exact times, including when the project's first session ran.
 
 ## Platform support
 
@@ -409,6 +524,7 @@ lib/transcript.js    transcript extractors (last message, model, title/slug/bran
 lib/usage.js         usage-limits fetcher + tolerant normalizer (undocumented API)
 lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
+lib/origin.js        the Origin + Host gate on every write
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)
@@ -429,6 +545,16 @@ data/                board.json, archive.json, settings.json, usage.json,
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
   moves all done cards into the Archive view for long-term keeping.
+- The count beside each project in the **Project** filter is that project's
+  cards on the board, and it follows the **Show done** toggle: with Done hidden
+  it stops counting finished cards, which used to make the dropdown overstate
+  the work in flight. It tracks that toggle and nothing else — the *Session* and
+  *Command* filters are applied to the cards already fetched, and once a project
+  is selected those are only that project's cards, so there is nothing to
+  compute the other projects' filtered counts from. The **Board** tab's count is
+  the post-filter figure. A project whose cards are all done stays listed at
+  **(0)** rather than disappearing — otherwise ticking **Show done** would leave
+  nothing to select.
 
 ### Custom columns
 

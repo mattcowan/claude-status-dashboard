@@ -18,6 +18,7 @@ const repo = require('./lib/repo');
 const usage = require('./lib/usage');
 const settings = require('./lib/settings');
 const skipPrompts = require('./lib/skip-prompts');
+const origin = require('./lib/origin');
 
 const VERSION = require('./package.json').version;
 const store = new Store();
@@ -61,22 +62,6 @@ function readBody(req) {
     });
     req.on('error', () => resolve({}));
   });
-}
-
-// Every other endpoint only reads or mutates board data; open-folder launches a
-// process, so it gets a stricter gate. A page on another origin can still POST
-// here (the API has no auth), but the browser stamps its own Origin on that
-// request, and only our own origins are accepted.
-function isTrustedOrigin(req) {
-  const origin = req.headers.origin;
-  if (origin === undefined) return true; // non-browser caller (CLI/curl); host check below still applies
-  const port = config.resolvePort();
-  return origin === 'http://127.0.0.1:' + port || origin === 'http://localhost:' + port;
-}
-
-function isLoopbackHost(req) {
-  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
 }
 
 // Reveal a directory in the OS file manager. The path always comes from a card
@@ -132,6 +117,13 @@ function serveStatic(req, res, pathname) {
 async function handleApi(req, res, pathname, query) {
   const method = req.method;
 
+  // Reads are open; every write has to come from a trusted origin on a loopback
+  // host. The rule and its reasoning live in lib/origin.js, where they can be
+  // tested without standing a server up.
+  if (!origin.allowsRequest(method, req)) {
+    return sendJson(res, 403, { error: 'forbidden' });
+  }
+
   // GET endpoints
   if (method === 'GET' && pathname === '/api/health') {
     return sendJson(res, 200, { ok: true, version: VERSION, pid: process.pid });
@@ -140,6 +132,9 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, {
       cards: store.listCards(query.project || null),
       columns: store.listColumns(),
+      // Whole-store totals for the view tabs, so the Archive and Projects tabs
+      // can show a count without the board fetching either view.
+      counts: store.counts(),
     });
   }
   if (method === 'GET' && pathname === '/api/columns') {
@@ -147,6 +142,10 @@ async function handleApi(req, res, pathname, query) {
   }
   if (method === 'GET' && pathname === '/api/projects') {
     return sendJson(res, 200, { projects: store.projects() });
+  }
+  // Whole-history roll-up (board + archive) behind the Projects view.
+  if (method === 'GET' && pathname === '/api/projects/summary') {
+    return sendJson(res, 200, { projects: store.projectSummary() });
   }
   if (method === 'GET' && pathname === '/api/archive') {
     return sendJson(res, 200, { cards: store.listArchive() });
@@ -185,6 +184,26 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'GET' && pathname === '/api/resolve') {
     const card = query.project ? store.resolveByProject(query.project) : null;
     return sendJson(res, 200, { card });
+  }
+
+  // A skip-listed bookkeeping command (/git-review, /git-commit-message — see
+  // lib/skip-prompts.js) ran in a session that ALREADY has a card. Those
+  // prompts never create a card, and this endpoint keeps that property: it only
+  // tags a card that is already on the board, and answers 200 either way so the
+  // hook has nothing to handle. The hook posts here without ensureServer(), so
+  // a session whose every prompt is skip-listed still never starts the server.
+  if (method === 'POST' && pathname === '/api/hook/skipped-command') {
+    const body = await readBody(req);
+    if (!body.session) return sendJson(res, 400, { error: 'session required' });
+    const card = store.noteSkipCommand(body.session, body.command);
+    // Still 200 either way — the hook must never fail a prompt over a tag — but
+    // `reason` separates the two ways nothing happened. "no-card" is the normal
+    // case (a session that has not earned a card); "rejected" means the name
+    // was not command-shaped, which is a configuration mistake worth being able
+    // to see rather than a silent no-op.
+    const reason = card ? null
+      : (store.getCard(body.session) ? 'rejected' : 'no-card');
+    return sendJson(res, 200, { card: card, tagged: !!card, reason: reason });
   }
 
   // Backstop (Stop hook)
@@ -284,9 +303,6 @@ async function handleApi(req, res, pathname, query) {
       return sendJson(res, 200, { card });
     }
     if (method === 'POST' && action === 'open-folder') {
-      if (!isTrustedOrigin(req) || !isLoopbackHost(req)) {
-        return sendJson(res, 403, { error: 'forbidden' });
-      }
       const card = store.getCardAnywhere(id);
       if (!card) return sendJson(res, 404, { error: 'card not found' });
       return openFolder(res, card.project);
