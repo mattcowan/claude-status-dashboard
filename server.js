@@ -18,6 +18,7 @@ const repo = require('./lib/repo');
 const usage = require('./lib/usage');
 const settings = require('./lib/settings');
 const skipPrompts = require('./lib/skip-prompts');
+const origin = require('./lib/origin');
 
 const VERSION = require('./package.json').version;
 const store = new Store();
@@ -61,22 +62,6 @@ function readBody(req) {
     });
     req.on('error', () => resolve({}));
   });
-}
-
-// Every other endpoint only reads or mutates board data; open-folder launches a
-// process, so it gets a stricter gate. A page on another origin can still POST
-// here (the API has no auth), but the browser stamps its own Origin on that
-// request, and only our own origins are accepted.
-function isTrustedOrigin(req) {
-  const origin = req.headers.origin;
-  if (origin === undefined) return true; // non-browser caller (CLI/curl); host check below still applies
-  const port = config.resolvePort();
-  return origin === 'http://127.0.0.1:' + port || origin === 'http://localhost:' + port;
-}
-
-function isLoopbackHost(req) {
-  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
 }
 
 // Reveal a directory in the OS file manager. The path always comes from a card
@@ -131,6 +116,13 @@ function serveStatic(req, res, pathname) {
 
 async function handleApi(req, res, pathname, query) {
   const method = req.method;
+
+  // Reads are open; every write has to come from a trusted origin on a loopback
+  // host. The rule and its reasoning live in lib/origin.js, where they can be
+  // tested without standing a server up.
+  if (!origin.allowsRequest(method, req)) {
+    return sendJson(res, 403, { error: 'forbidden' });
+  }
 
   // GET endpoints
   if (method === 'GET' && pathname === '/api/health') {
@@ -311,9 +303,6 @@ async function handleApi(req, res, pathname, query) {
       return sendJson(res, 200, { card });
     }
     if (method === 'POST' && action === 'open-folder') {
-      if (!isTrustedOrigin(req) || !isLoopbackHost(req)) {
-        return sendJson(res, 403, { error: 'forbidden' });
-      }
       const card = store.getCardAnywhere(id);
       if (!card) return sendJson(res, 404, { error: 'card not found' });
       return openFolder(res, card.project);

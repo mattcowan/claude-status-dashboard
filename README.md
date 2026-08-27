@@ -409,10 +409,29 @@ plus three actions:
   at.
 - **📋 Copy path** — the working directory to the clipboard.
 
-The open-folder endpoint launches a process, so it is gated more tightly than
-the data endpoints: the path comes only from the card record (never from the
-request body), the `Origin` must be this dashboard's own loopback origin, and the
-`Host` must be loopback. It can only ever open a folder already on the board.
+**Every write is gated.** Any request that is not a `GET` must carry an `Origin`
+this dashboard recognizes (its own loopback origin, or none at all) *and* a
+loopback `Host`. The API has no auth — it is a local board — so those two
+headers are what stands between it and a page on another origin. A browser
+cannot forge `Origin`; a DNS-rebinding page resolving to `127.0.0.1` still sends
+its own name in `Host`. Two callers get through: this dashboard's own page, and
+a non-browser client (the CLI and the hooks), which sends no `Origin` at all.
+
+The gate is one check at the top of the API router rather than a condition
+repeated per route, so a new write endpoint is covered the day it is added.
+It lives in [`lib/origin.js`](lib/origin.js) as a pure function of the two
+headers, so [`test/origin.test.js`](test/origin.test.js) can exercise it without
+standing a server up.
+That matters, because it started life guarding only open-folder — on the
+reasoning that launching a process deserved more care than "mutating board
+data" — and the data endpoints turned out to include `DELETE /api/cards/:id`
+and `/api/archive-done`. A cross-origin form `POST` reaches those without a
+preflight, because a "simple request" with `Content-Type: text/plain` still
+parses as JSON. Losing a card is not less bad than opening a folder.
+
+open-folder keeps its extra restriction on top of the gate: the path comes only
+from the card record, never from the request body, so it can only ever open a
+folder already on the board.
 
 ## Views: Board, Projects, Archive
 
@@ -505,6 +524,7 @@ lib/transcript.js    transcript extractors (last message, model, title/slug/bran
 lib/usage.js         usage-limits fetcher + tolerant normalizer (undocumented API)
 lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
+lib/origin.js        the Origin + Host gate on every write
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)

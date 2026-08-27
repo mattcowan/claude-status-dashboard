@@ -233,8 +233,13 @@ test('both recording paths accept the same command names', () => {
   // The two paths used to disagree: noteSkipCommand() rejected anything outside
   // [A-Za-z0-9._:-] while noteSkippedBefore() accepted any non-empty string, so
   // whether a command got a tag depended on when in the session it ran.
-  const ok = ['git-review', 'plugin:skill', 'frontend/deploy', 'a.b_c', 'x'];
-  const bad = ['../../etc/passwd', 'has space', '<script>', '-leading', 'x'.repeat(61), '', '/'];
+  const ok = ['git-review', 'plugin:skill', 'frontend/deploy', 'a.b_c', 'x', 'a..b'];
+  // 'a/../b' and 'a/./b' matter more than they look: they satisfy every
+  // character rule, so only a segment check keeps them out. The obvious
+  // '../../etc/passwd' was already caught by "first character must be
+  // alphanumeric", which made the charset rule look more complete than it was.
+  const bad = ['../../etc/passwd', 'a/../b', 'a/./b', 'a//b', 'has space',
+    '<script>', '-leading', 'x'.repeat(61), '', '/'];
 
   for (const name of ok) {
     const s = fixture([card({ id: 'a' })]);
@@ -250,6 +255,22 @@ test('both recording paths accept the same command names', () => {
     assert.deepEqual(s.board.cards.a.skippedBefore.commands, [],
       'pre-card path should reject ' + JSON.stringify(name));
   }
+});
+
+test('noteSkippedBefore() deduplicates before applying the five-name cap', () => {
+  // "/git-review" and "git-review" normalize to one name. Left as duplicates
+  // they persist, read back as "(/git-review, /git-review)" in the history
+  // line, and — the part that loses data — fill the cap so a genuinely
+  // different command falls off the end.
+  const s = fixture([card({ id: 'a' })]);
+  s.noteSkippedBefore('a', { count: 6, commands: ['/a', 'a', '/a', 'a', '/a', 'b'] });
+  assert.deepEqual(s.board.cards.a.skippedBefore.commands, ['a', 'b'],
+    'duplicates must not evict a real command name');
+
+  const s2 = fixture([card({ id: 'b' })]);
+  s2.noteSkippedBefore('b', { count: 2, commands: ['git-review', '/git-review'] });
+  const line = s2.board.cards.b.history.find((h) => h.kind === 'skipped').text;
+  assert.ok(line.includes('(/git-review)'), 'history should name the command once, got: ' + line);
 });
 
 test('projects() and projectSummary() agree on how many distinct folders exist', () => {
