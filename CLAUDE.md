@@ -50,7 +50,8 @@ the feature works.
 ## Layout
 
 ```
-server.js            HTTP server: REST API + static UI + SSE. ~510 lines.
+server.js            HTTP server: REST API + static UI + SSE. Small enough to
+                     read end to end before changing a route.
 lib/config.js        port/paths resolution (PORT env, data/server.port)
 lib/store.js         the whole data model: in-memory board, debounced atomic
                      save, column logic, project roll-ups. The big one.
@@ -60,10 +61,15 @@ lib/usage.js         usage-limits fetch + tolerant normalizer (undocumented API)
 lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list — commands that don't earn a card
 lib/origin.js        the Origin + Host gate on every write
+lib/repo.js          resolves a folder's git remote to the GitHub URL the
+                     cards and the Projects "Links" column render
 bin/status.js        the one CLI: hook subcommands, Claude subcommands,
                      ensure-server, session resolution
 public/index.html    markup for all three views (board/projects/archive)
-public/app.js        the entire front end, ~1950 lines, no framework
+public/app.js        the entire front end. No framework, no build — and the
+                     largest file in the repo, so it is worth grepping for the
+                     render function you want rather than reading it top to
+                     bottom.
 public/styles.css    all styling, hand-written custom properties
 test/                node:test suites (no runner dependency)
 examples/            hook JSON, CLAUDE.md snippet, /post-status — setup copy
@@ -162,14 +168,17 @@ One file, no framework, no build. Conventions in force:
 
 - **`el(tag, attrs, children)`** is the only DOM constructor. It handles
   `class`, `text`, `html`, `style`, `on*` handlers and plain attributes. Use it
-  rather than template strings — the one place strings are used
-  (`renderProjectFilter`, `renderCommandFilter`) escapes through
-  `escapeHtml()` and exists only because `<option>` lists are replaced
-  wholesale.
-- **`setOptions(sel, html)`** replaces a `<select>`'s options only when the
-  markup actually changed. `render()` runs on every refresh, and rewriting
-  `innerHTML` under an open or focused dropdown closes it and loses the
-  keyboard position. Any new `<select>` that re-renders must use it.
+  rather than template strings — the one remaining string path
+  (`renderCommandFilter`, which replaces a `<select>`'s `<option>` list
+  wholesale) escapes every interpolation through `escapeHtml()`.
+- **A re-render must not rebuild a control that is open.** `render()` runs on
+  every poll and every SSE event, so anything rewritten unconditionally is
+  rewritten under whoever is using it — closing a dropdown, resetting a scroll
+  box, or destroying the node `aria-activedescendant` points at (which several
+  screen readers announce again). Two guards implement this, and new UI needs
+  one of them: `setOptions(sel, html)` for `<select>` options, and the
+  `list.dataset.sig` check in `renderComboList()` for the project combobox.
+  Both compare a signature of what would be drawn and bail when it matches.
 - **State lives in the `state` object at the top**, preferences persist through
   `loadPrefs()`/`savePrefs()` into one `localStorage` key. **Every persisted
   value is validated on read** against a known set, because a stale or

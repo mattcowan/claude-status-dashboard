@@ -578,9 +578,9 @@ data/                board.json, archive.json, settings.json, usage.json,
   *Command* filters are applied to the cards already fetched, and once a project
   is selected those are only that project's cards, so there is nothing to
   compute the other projects' filtered counts from. The **Board** tab's count is
-  the post-filter figure. A project whose cards are all done stays listed at
-  **(0)** rather than disappearing — otherwise ticking **Show done** would leave
-  nothing to select.
+  the post-filter figure. A project whose cards are all done stays in the list
+  with a count of **0** rather than disappearing — otherwise ticking **Show
+  done** would leave nothing to select.
 
 ### Custom columns
 

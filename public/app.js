@@ -377,6 +377,10 @@ const combo = {
   typing: false,
   active: -1,     // index into combo.items, or -1 for "nothing highlighted"
   items: [],      // the options currently listed, post-filter
+  // Set by the keyboard only. A mouse moving over an option moves `active` too,
+  // and scrolling the list under the pointer on hover would fight the user for
+  // the scrollbar.
+  scrollToActive: false,
 };
 
 function comboInput() { return document.getElementById('projectFilter'); }
@@ -435,6 +439,22 @@ function renderComboList() {
   combo.items = comboOptions().filter((o) => comboMatches(o, q));
   if (combo.active >= combo.items.length) combo.active = combo.items.length - 1;
 
+  // Read-and-clear before the guard below, so a skipped rebuild does not leave
+  // a scroll request armed to fire on some later, unrelated repaint.
+  const wantScroll = combo.scrollToActive;
+  combo.scrollToActive = false;
+
+  // The same guard setOptions() puts on the command <select>, and for the same
+  // reason — a combobox is not a <select>, so it escapes that helper but not the
+  // rule. render() runs on every poll and every SSE event, and refresh() reaches
+  // here twice per cycle (once via render, once via refreshProjects). Rebuilding
+  // an OPEN list on that cadence would reset the scroll box the user is reading
+  // and destroy the element aria-activedescendant points at, which several
+  // screen readers announce again each time.
+  const sig = JSON.stringify([q, combo.active, combo.items.map((o) => [o.value, o.label, o.count])]);
+  if (list.dataset.sig === sig) return;
+  list.dataset.sig = sig;
+
   list.innerHTML = '';
   if (!combo.items.length) {
     // role=option on the empty message would make it selectable; a plain <li>
@@ -477,7 +497,7 @@ function renderComboList() {
   }
   input.setAttribute('aria-activedescendant', 'pf-opt-' + combo.active);
   const activeNode = list.children[combo.active];
-  if (activeNode) activeNode.scrollIntoView({ block: 'nearest' });
+  if (wantScroll && activeNode) activeNode.scrollIntoView({ block: 'nearest' });
 }
 
 function openCombo(fromTyping) {
@@ -492,6 +512,8 @@ function openCombo(fromTyping) {
     combo.query = '';
     const all = comboOptions();
     combo.active = Math.max(0, all.findIndex((o) => o.value === state.project));
+    // Opening on a project far down a 30-row list must bring it into view.
+    combo.scrollToActive = true;
   }
   list.classList.remove('hidden');
   input.setAttribute('aria-expanded', 'true');
@@ -504,8 +526,12 @@ function closeCombo(revert) {
   if (!input || !list) return;
   combo.open = false;
   combo.active = -1;
+  combo.scrollToActive = false;
   list.classList.add('hidden');
   list.innerHTML = '';
+  // The emptied list must not keep the signature of what it used to hold, or
+  // reopening on an unchanged board would match it and render nothing.
+  delete list.dataset.sig;
   input.setAttribute('aria-expanded', 'false');
   input.removeAttribute('aria-activedescendant');
   if (revert !== false) syncComboInput();
@@ -1532,9 +1558,16 @@ function render() {
     // A one-shot notice (from the reset button) wins for this paint: clearing
     // the filters leaves nothing hidden, so the count below would say nothing
     // at all about an action that just changed the whole board.
-    lifeNote.textContent = filterNotice || ((state.life || state.cmd) && hidden
+    const noteText = filterNotice || ((state.life || state.cmd) && hidden
       ? hidden + ' hidden by filter'
       : '');
+    // Same guard as #projectsSub, for the same reason: this is a live region
+    // and render() runs on every poll, so re-setting an unchanged sentence made
+    // "3 hidden by filter" re-announce every few seconds for as long as a filter
+    // was in force. A one-shot notice is written even when it repeats — it is
+    // the answer to a deliberate press, and a silent second press reads as a
+    // dead button.
+    if (filterNotice || lifeNote.textContent !== noteText) lifeNote.textContent = noteText;
   }
   filterNotice = '';
   syncResetButton();
@@ -1966,14 +1999,19 @@ projectInputEl.addEventListener('mousedown', () => {
 });
 
 projectInputEl.addEventListener('keydown', (e) => {
-  const nav = { ArrowDown: 1, ArrowUp: -1, Home: 'first', End: 'last' }[e.key];
+  // Arrows only. The folder menu's handler (showPathMenu) also binds Home and
+  // End to its first and last item, which is right for a menu of buttons —
+  // here the same keys belong to the TEXT, and swallowing them would leave no
+  // way to get the caret to the start of a typed path. The APG says the same:
+  // in an editable combobox Home/End act on the field, not on the listbox.
+  // Nothing is lost, because the arrow keys wrap.
+  const nav = { ArrowDown: 1, ArrowUp: -1 }[e.key];
   if (nav) {
     e.preventDefault();
     if (!combo.open) { openCombo(false); return; }
     if (!combo.items.length) return;
-    combo.active = nav === 'first' ? 0
-      : nav === 'last' ? combo.items.length - 1
-      : (combo.active + nav + combo.items.length) % combo.items.length;
+    combo.active = (combo.active + nav + combo.items.length) % combo.items.length;
+    combo.scrollToActive = true;
     renderComboList();
     return;
   }
