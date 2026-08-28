@@ -12,6 +12,13 @@ const state = {
   counts: null,             // whole-store totals from /api/board, for the tab labels
   projectRows: [],          // last /api/projects/summary payload
   projectSort: 'recent',    // 'recent' | 'name' | 'sessions'
+  projectSortDir: 'desc',   // 'asc' | 'desc' — flipped by clicking the active header
+  // Free-text filter over the Projects table. Deliberately NOT persisted: it is
+  // a search box, not a setting, and a remembered query would hide rows on the
+  // next page load for a reason nothing on screen explains until you notice the
+  // box. The board's filters can persist because each one is a labelled control
+  // showing its own value; a restored search reads as a shorter table.
+  projectQuery: '',
   openHistory: new Set(),  // card ids whose History section is expanded (kept across refreshes)
   fillWidth: true,         // columns grow to fill wide screens (persisted)
   expanded: new Set(),     // card ids explicitly expanded (default is collapsed; persisted)
@@ -48,6 +55,9 @@ function loadPrefs() {
     // the filter note explains.
     state.cmd = typeof p.cmd === 'string' ? p.cmd.slice(0, 60) : '';
     state.projectSort = ['recent', 'name', 'sessions'].includes(p.projectSort) ? p.projectSort : 'recent';
+    state.projectSortDir = p.projectSortDir === 'asc' || p.projectSortDir === 'desc'
+      ? p.projectSortDir
+      : PROJECT_SORT_DEFAULT_DIR[state.projectSort];
     // Same guard as the filters: an unknown stored value must not leave the
     // page with no panel showing and no obvious way back.
     state.view = ['board', 'projects', 'archive'].includes(p.view) ? p.view : 'board';
@@ -66,7 +76,7 @@ function savePrefs() {
     const expanded = state.cards.length
       ? Array.from(state.expanded).filter((id) => onBoard.has(id))
       : Array.from(state.expanded);
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, view: state.view, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, projectSortDir: state.projectSortDir, view: state.view, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -337,6 +347,15 @@ async function refreshProjects() {
   renderProjectFilter();
 }
 
+// ---------- the project filter (a typeahead combobox) ----------
+//
+// This was a native <select>. One row per project folder any session has ever
+// opened outgrows what a <select> can be navigated with: its only keyboard
+// search is first-letter cycling, and half these labels start with the same
+// word. So it is an ARIA 1.2 combobox — a text input that filters a listbox —
+// with the whole keyboard contract implemented here, because that is the price
+// of leaving the native control behind.
+//
 // The count in parentheses is a project's cards on the board, tracking the
 // "Show done" toggle and nothing else: with Done hidden, a project's finished
 // cards are not on screen and counting them made the dropdown overstate the
@@ -348,20 +367,172 @@ async function refreshProjects() {
 // to compute the other projects' filtered counts from. The Board tab's own
 // count is the post-filter figure; this one answers "how much is on the board
 // for this project", which is what you need when choosing what to switch to.
-//
-// Rendered separately from the fetch because flipping Show done is a purely
-// client-side re-render with nothing to re-request.
-function renderProjectFilter() {
-  const sel = document.getElementById('projectFilter');
-  if (!sel) return;
-  const current = state.project;
-  const opts = ['<option value="">All projects</option>'];
+
+const combo = {
+  open: false,
+  // What the user has typed. Only consulted while `typing` is true, so an
+  // untouched box lists every project rather than filtering against the label
+  // sitting in it from the current selection.
+  query: '',
+  typing: false,
+  active: -1,     // index into combo.items, or -1 for "nothing highlighted"
+  items: [],      // the options currently listed, post-filter
+};
+
+function comboInput() { return document.getElementById('projectFilter'); }
+function comboList() { return document.getElementById('projectFilterList'); }
+
+// Every option the filter can offer, in list order. "All projects" is an option
+// like any other rather than a pinned row: it is reachable by typing "all", and
+// pinning it would put a row that cannot match above rows that did.
+function comboOptions() {
+  const opts = [{ value: '', label: 'All projects', path: '', count: null }];
   state.projectList.forEach((p) => {
-    const n = state.showDone ? p.count : (p.activeCount != null ? p.activeCount : p.count);
-    opts.push('<option value="' + escapeHtml(p.project) + '"' + (p.project === current ? ' selected' : '') + '>' +
-      escapeHtml(p.projectLabel) + ' (' + n + ')</option>');
+    opts.push({
+      value: p.project,
+      label: p.projectLabel,
+      path: p.project,
+      count: state.showDone ? p.count : (p.activeCount != null ? p.activeCount : p.count),
+    });
   });
-  setOptions(sel, opts.join(''));
+  return opts;
+}
+
+// Substring match over the label AND the full path, so "wamp" finds a project
+// by where it lives when you can't remember what it is called.
+function comboMatches(opt, q) {
+  if (!q) return true;
+  return (opt.label + ' ' + opt.path).toLowerCase().includes(q);
+}
+
+function comboLabelFor(value) {
+  if (!value) return '';
+  const found = state.projectList.find((p) => p.project === value);
+  // A selected project that has since dropped off the list (its last card was
+  // deleted) still has to show as something, or the box would read "All
+  // projects" while the board stayed filtered to it.
+  return found ? found.projectLabel : value;
+}
+
+// Put the current selection back in the box. Called on close, on blur, and on
+// every board refresh — anywhere the typed text must stop standing in for a
+// filter that is not actually in force.
+function syncComboInput() {
+  const input = comboInput();
+  if (!input) return;
+  combo.typing = false;
+  combo.query = '';
+  const label = comboLabelFor(state.project);
+  if (input.value !== label) input.value = label;
+}
+
+function renderComboList() {
+  const list = comboList();
+  const input = comboInput();
+  if (!list || !input) return;
+
+  const q = combo.typing ? combo.query.trim().toLowerCase() : '';
+  combo.items = comboOptions().filter((o) => comboMatches(o, q));
+  if (combo.active >= combo.items.length) combo.active = combo.items.length - 1;
+
+  list.innerHTML = '';
+  if (!combo.items.length) {
+    // role=option on the empty message would make it selectable; a plain <li>
+    // with role=presentation keeps the listbox's child list honest.
+    list.appendChild(el('li', { class: 'combo-empty', role: 'presentation', text: 'No project matches “' + combo.query.trim() + '”' }, []));
+    input.removeAttribute('aria-activedescendant');
+    return;
+  }
+
+  combo.items.forEach((opt, i) => {
+    const on = i === combo.active;
+    const node = el('li', {
+      class: 'combo-opt' + (on ? ' active' : '') + (opt.value === state.project ? ' current' : ''),
+      id: 'pf-opt-' + i,
+      role: 'option',
+      'aria-selected': on ? 'true' : 'false',
+      title: opt.path || 'Every project',
+    }, [
+      el('span', { class: 'combo-opt-label', text: opt.label }, []),
+      opt.count == null ? null : el('span', { class: 'combo-opt-count', text: String(opt.count) }, []),
+    ].filter(Boolean));
+    // mousedown, not click: the input's blur handler closes the list, and by
+    // the time a click lands the row it was aimed at is gone.
+    node.addEventListener('mousedown', (e) => { e.preventDefault(); comboChoose(i); });
+    node.addEventListener('mousemove', () => {
+      if (combo.active === i) return;
+      combo.active = i;
+      renderComboList();
+    });
+    list.appendChild(node);
+  });
+
+  // aria-activedescendant is what tells a screen reader which option the arrow
+  // keys have landed on, since real focus never leaves the input. It has to be
+  // removed rather than emptied when nothing is highlighted: an empty value is
+  // a dangling idref, not an absence.
+  if (combo.active < 0) {
+    input.removeAttribute('aria-activedescendant');
+    return;
+  }
+  input.setAttribute('aria-activedescendant', 'pf-opt-' + combo.active);
+  const activeNode = list.children[combo.active];
+  if (activeNode) activeNode.scrollIntoView({ block: 'nearest' });
+}
+
+function openCombo(fromTyping) {
+  const input = comboInput();
+  const list = comboList();
+  if (!input || !list) return;
+  combo.open = true;
+  // Opening without typing highlights the project already in force, so Enter
+  // straight after ArrowDown is a no-op rather than a surprise.
+  if (!fromTyping) {
+    combo.typing = false;
+    combo.query = '';
+    const all = comboOptions();
+    combo.active = Math.max(0, all.findIndex((o) => o.value === state.project));
+  }
+  list.classList.remove('hidden');
+  input.setAttribute('aria-expanded', 'true');
+  renderComboList();
+}
+
+function closeCombo(revert) {
+  const input = comboInput();
+  const list = comboList();
+  if (!input || !list) return;
+  combo.open = false;
+  combo.active = -1;
+  list.classList.add('hidden');
+  list.innerHTML = '';
+  input.setAttribute('aria-expanded', 'false');
+  input.removeAttribute('aria-activedescendant');
+  if (revert !== false) syncComboInput();
+}
+
+// Apply the option at `i`. The project filter is the one filter the server
+// applies (it is a query parameter on /api/board), so this is the one that
+// needs a round trip rather than a re-render.
+function comboChoose(i) {
+  const opt = combo.items[i];
+  if (!opt) return;
+  const changed = opt.value !== state.project;
+  state.project = opt.value;
+  closeCombo(false);
+  syncComboInput();
+  if (changed) refresh();
+  else render();   // still repaint: the reset button's state may not have moved
+}
+
+// Called from render(). The list is only rebuilt while it is open, and the
+// input text is only rewritten when the user is not mid-type — a background
+// refresh must not reach into a box someone is typing in.
+function renderProjectFilter() {
+  const input = comboInput();
+  if (!input) return;
+  if (!combo.typing && document.activeElement !== input) syncComboInput();
+  if (combo.open) renderComboList();
 }
 
 // Replace a <select>'s options only when they actually changed. render() runs
@@ -371,6 +542,53 @@ function setOptions(sel, html) {
   if (sel.dataset.sig === html) return;
   sel.dataset.sig = html;
   sel.innerHTML = html;
+}
+
+// ---------- reset filters ----------
+
+// One-shot message for the #lifeNote live region. render() prefers it over the
+// "n hidden by filter" text for exactly one paint, which is what makes an
+// action whose only visible result is "the board got bigger" audible.
+let filterNotice = '';
+
+// The three filters the reset button clears. Show done, Fill width and the
+// expanded set are display preferences rather than filters, and are left alone:
+// resetting them would undo choices the user did not ask about.
+function activeFilterCount() {
+  return (state.project ? 1 : 0) + (state.life ? 1 : 0) + (state.cmd ? 1 : 0);
+}
+
+function syncResetButton() {
+  const btn = document.getElementById('resetFilters');
+  if (!btn) return;
+  const n = activeFilterCount();
+  btn.setAttribute('aria-disabled', n ? 'false' : 'true');
+  btn.classList.toggle('is-off', !n);
+  btn.title = n
+    ? 'Clear the ' + n + ' active filter' + (n === 1 ? '' : 's') + ' (Project, Session, Command)'
+    : 'No filters are active';
+}
+
+function resetFilters() {
+  if (!activeFilterCount()) {
+    filterNotice = 'No filters are active.';
+    render();
+    return;
+  }
+  const hadProject = !!state.project;
+  state.project = '';
+  state.life = '';
+  state.cmd = '';
+  const lifeEl = document.getElementById('lifeFilter');
+  const cmdEl = document.getElementById('cmdFilter');
+  if (lifeEl) lifeEl.value = '';
+  if (cmdEl) cmdEl.value = '';
+  closeCombo(false);
+  syncComboInput();
+  savePrefs();
+  filterNotice = 'Filters cleared.';
+  // Only the project filter is server-side, so only it needs the round trip.
+  if (hadProject) refresh(); else render();
 }
 
 // ---------- projects view ----------
@@ -385,43 +603,85 @@ async function refreshProjectRows() {
   renderProjects();
 }
 
+// Comparators are all written ASCENDING and the direction is applied once, in
+// renderProjects. Writing each one twice is how a "descending" that quietly
+// disagrees with its own ascending counterpart on the tiebreak gets in.
 const PROJECT_SORTS = {
-  recent: (a, b) => String(b.lastActiveAt).localeCompare(String(a.lastActiveAt)),
+  recent: (a, b) => String(a.lastActiveAt).localeCompare(String(b.lastActiveAt)),
   name: (a, b) => String(a.projectLabel).localeCompare(String(b.projectLabel)) ||
     String(a.project).localeCompare(String(b.project)),
-  sessions: (a, b) => (b.total - a.total) ||
-    String(b.lastActiveAt).localeCompare(String(a.lastActiveAt)),
+  sessions: (a, b) => (a.total - b.total) ||
+    String(a.lastActiveAt).localeCompare(String(b.lastActiveAt)),
 };
+
+// The direction a column sorts in when you first click it — the useful end of
+// each one. Names read A→Z; counts and dates lead with the biggest and newest,
+// because "which project have I worked in most / last" is the question the
+// column exists to answer. Clicking the active column flips it.
+const PROJECT_SORT_DEFAULT_DIR = { recent: 'desc', name: 'asc', sessions: 'desc' };
+
+// Free-text match over the label and the full path, so a project is findable
+// either by what it is called or by where it lives on disk.
+function projectMatches(row, q) {
+  if (!q) return true;
+  return (String(row.projectLabel || '') + ' ' + String(row.project || '')).toLowerCase().includes(q);
+}
 
 function renderProjects() {
   const body = document.getElementById('projectsBody');
   if (!body) return;
   body.innerHTML = '';
 
-  const rows = state.projectRows.slice().sort(PROJECT_SORTS[state.projectSort] || PROJECT_SORTS.recent);
+  const q = state.projectQuery.trim().toLowerCase();
+  const cmp = PROJECT_SORTS[state.projectSort] || PROJECT_SORTS.recent;
+  const sign = state.projectSortDir === 'asc' ? 1 : -1;
+  const rows = state.projectRows
+    .filter((r) => projectMatches(r, q))
+    .sort((a, b) => sign * cmp(a, b));
 
   const sub = document.getElementById('projectsSub');
   if (sub) {
     const sessions = rows.reduce((n, r) => n + r.total, 0);
-    sub.textContent = rows.length
-      ? rows.length + (rows.length === 1 ? ' project' : ' projects') + ', ' +
-        sessions + (sessions === 1 ? ' session' : ' sessions') + ' on the board and in the archive'
-      : '';
+    const total = state.projectRows.length;
+    const noun = (n) => n + (n === 1 ? ' project' : ' projects');
+    let text = '';
+    if (q) {
+      // Say the denominator: "3 projects" while a search is running reads as
+      // though three is all there has ever been.
+      text = rows.length + ' of ' + noun(total) + ' match “' + state.projectQuery.trim() + '”' +
+        (rows.length ? ', ' + sessions + (sessions === 1 ? ' session' : ' sessions') : '');
+    } else if (total) {
+      text = noun(total) + ', ' + sessions + (sessions === 1 ? ' session' : ' sessions') +
+        ' on the board and in the archive';
+    }
+    // Only write on a real change: this is a live region, and a background
+    // refresh that re-sets the same sentence would re-announce it.
+    if (sub.textContent !== text) sub.textContent = text;
   }
 
   // Reflect the active sort on the header buttons for both sighted and
-  // assistive-tech users: aria-sort on the cell, a caret in the label.
+  // assistive-tech users: aria-sort on the cell, a caret in the label, and a
+  // tooltip saying what the next click will do.
   document.querySelectorAll('.projects-table th').forEach((th) => {
     const btn = th.querySelector('.th-sort');
     if (!btn) return;
     const active = btn.dataset.sort === state.projectSort;
-    th.setAttribute('aria-sort', active ? (btn.dataset.sort === 'name' ? 'ascending' : 'descending') : 'none');
+    const dir = active ? state.projectSortDir : PROJECT_SORT_DEFAULT_DIR[btn.dataset.sort];
+    th.setAttribute('aria-sort', active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none');
     btn.classList.toggle('active', active);
+    btn.classList.toggle('asc', active && dir === 'asc');
+    btn.classList.toggle('desc', active && dir === 'desc');
+    const next = active ? (dir === 'asc' ? 'descending' : 'ascending') : (dir === 'asc' ? 'ascending' : 'descending');
+    btn.title = 'Sort by ' + btn.textContent.trim().toLowerCase() + ', ' + next;
   });
 
   if (!rows.length) {
     body.appendChild(el('tr', {}, [
-      el('td', { class: 'col-empty', colspan: '6', text: 'No projects recorded yet.' }, []),
+      el('td', {
+        class: 'col-empty',
+        colspan: '5',
+        text: q ? 'No project matches “' + state.projectQuery.trim() + '”.' : 'No projects recorded yet.',
+      }, []),
     ]));
     return;
   }
@@ -504,17 +764,12 @@ function projectRowNode(row) {
     links.appendChild(el('span', { class: 'placeholder', text: '—' }, []));
   }
 
-  const cmds = el('td', { class: 'p-cmds' }, []);
-  const names = Object.keys(row.skipCommands || {}).sort();
-  if (!names.length) cmds.appendChild(el('span', { class: 'placeholder', text: '—' }, []));
-  names.forEach((name) => {
-    const meta = CMD_TAGS[name] || {};
-    const n = row.skipCommands[name];
-    const b = badge('cmd', [(meta.glyph || CMD_GLYPH_FALLBACK) + ' /' + name,
-      n > 1 ? el('span', { class: 'cmd-n', text: '×' + n }, []) : null].filter(Boolean));
-    b.setAttribute('title', n + (n === 1 ? ' session' : ' sessions') + ' in this project ran /' + name);
-    cmds.appendChild(b);
-  });
+  // No Commands column here. The per-project command tags were five rows of
+  // badges answering a question the Board tab's Command filter already answers
+  // per session, and they cost the table the width that the project path and
+  // the last headline actually need. /api/projects/summary still returns
+  // skipCommands (the cards use it, and store-projects.test.js pins it) — this
+  // view just does not spend a column on it.
 
   return el('tr', {}, [
     el('td', { class: 'p-name' }, [
@@ -525,7 +780,6 @@ function projectRowNode(row) {
       el('span', { class: 'p-total', text: String(row.total) }, []),
       parts.length ? el('span', { class: 'p-split', text: parts.join(' · ') }, []) : null,
     ].filter(Boolean)),
-    cmds,
     lastCell,
     el('td', {
       class: 'p-when',
@@ -1275,10 +1529,15 @@ function render() {
   // say which is which.
   const lifeNote = document.getElementById('lifeNote');
   if (lifeNote) {
-    lifeNote.textContent = (state.life || state.cmd) && hidden
+    // A one-shot notice (from the reset button) wins for this paint: clearing
+    // the filters leaves nothing hidden, so the count below would say nothing
+    // at all about an action that just changed the whole board.
+    lifeNote.textContent = filterNotice || ((state.life || state.cmd) && hidden
       ? hidden + ' hidden by filter'
-      : '';
+      : '');
   }
+  filterNotice = '';
+  syncResetButton();
 
   // The Board tab's count is this figure — cards actually rendered, after Show
   // done and both filters. That is also why the project dropdown's own count
@@ -1687,7 +1946,76 @@ function setAllExpanded(expand) {
 
 loadPrefs();
 
-document.getElementById('projectFilter').addEventListener('change', (e) => { state.project = e.target.value; refresh(); });
+// The project combobox. The keyboard contract is the ARIA 1.2 pattern: arrows
+// move a virtual cursor (aria-activedescendant) while real focus stays in the
+// input, Enter commits, Escape backs out without committing, Tab leaves.
+const projectComboEl = document.getElementById('projectCombo');
+const projectInputEl = document.getElementById('projectFilter');
+
+projectInputEl.addEventListener('input', () => {
+  combo.typing = true;
+  combo.query = projectInputEl.value;
+  // First match highlighted, so Enter after typing does the obvious thing.
+  combo.active = 0;
+  if (!combo.open) openCombo(true); else renderComboList();
+});
+
+projectInputEl.addEventListener('mousedown', () => {
+  // Toggle on click, like the native <select> this replaced.
+  if (combo.open) closeCombo(); else openCombo(false);
+});
+
+projectInputEl.addEventListener('keydown', (e) => {
+  const nav = { ArrowDown: 1, ArrowUp: -1, Home: 'first', End: 'last' }[e.key];
+  if (nav) {
+    e.preventDefault();
+    if (!combo.open) { openCombo(false); return; }
+    if (!combo.items.length) return;
+    combo.active = nav === 'first' ? 0
+      : nav === 'last' ? combo.items.length - 1
+      : (combo.active + nav + combo.items.length) % combo.items.length;
+    renderComboList();
+    return;
+  }
+  if (e.key === 'Enter') {
+    if (!combo.open || combo.active < 0) return;
+    e.preventDefault();
+    comboChoose(combo.active);
+    return;
+  }
+  if (e.key === 'Escape') {
+    // Only swallow the key when there was a popup to dismiss; otherwise leave
+    // it for anything else on the page that listens for it.
+    if (!combo.open) return;
+    e.preventDefault();
+    closeCombo();
+    return;
+  }
+  if (e.key === 'Tab' && combo.open) closeCombo();
+});
+
+document.getElementById('projectFilterToggle').addEventListener('mousedown', (e) => {
+  e.preventDefault();   // keep focus in the input rather than moving it here
+  if (combo.open) closeCombo(); else openCombo(false);
+  projectInputEl.focus();
+});
+
+// focusout on the wrapper, not blur on the input: focus moving to the ▾ button
+// is still inside the control. relatedTarget is null when the window itself
+// loses focus, which should also close it.
+projectComboEl.addEventListener('focusout', (e) => {
+  if (e.relatedTarget && projectComboEl.contains(e.relatedTarget)) return;
+  if (combo.open) closeCombo();
+  else syncComboInput();   // typed text that never opened a list must not linger
+});
+
+document.addEventListener('mousedown', (e) => {
+  if (!combo.open || projectComboEl.contains(e.target)) return;
+  closeCombo();
+}, true);
+
+document.getElementById('resetFilters').addEventListener('click', resetFilters);
+
 const lifeFilterEl = document.getElementById('lifeFilter');
 lifeFilterEl.value = state.life;
 // render(), not refresh(): the filter is purely client-side, so there is
@@ -1791,13 +2119,39 @@ document.querySelector('.tabs').addEventListener('keydown', (e) => {
 
 setView(state.view);
 
-// Sorting the projects table is client-side over the rows already fetched.
+// Sorting and searching the projects table are both client-side over the rows
+// already fetched — there is one row per project ever opened, which is a list
+// small enough that a round trip would only add latency.
 document.querySelectorAll('.projects-table .th-sort').forEach((btn) => {
   btn.addEventListener('click', () => {
-    state.projectSort = btn.dataset.sort;
+    const key = btn.dataset.sort;
+    if (state.projectSort === key) {
+      // Same column again: flip it. This is what makes "sortable" mean sortable
+      // rather than "sorted one way I don't get to choose".
+      state.projectSortDir = state.projectSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.projectSort = key;
+      state.projectSortDir = PROJECT_SORT_DEFAULT_DIR[key];
+    }
     savePrefs();
     renderProjects();
   });
+});
+
+const projectSearchEl = document.getElementById('projectSearch');
+projectSearchEl.value = state.projectQuery;
+projectSearchEl.addEventListener('input', (e) => {
+  state.projectQuery = e.target.value;
+  renderProjects();
+});
+projectSearchEl.addEventListener('keydown', (e) => {
+  // Escape clears the box. type=search gives this natively in some browsers and
+  // not others; doing it here makes it the same everywhere.
+  if (e.key !== 'Escape' || !projectSearchEl.value) return;
+  e.preventDefault();
+  projectSearchEl.value = '';
+  state.projectQuery = '';
+  renderProjects();
 });
 document.getElementById('archiveDone').addEventListener('click', archiveDone);
 

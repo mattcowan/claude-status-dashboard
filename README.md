@@ -475,8 +475,6 @@ Each row carries:
   project's most recent card, so the path still comes from a stored record and
   never from the request body;
 - the total session count, split into *on board / done / archived*;
-- the **command tags** for the project, counted by how many *sessions* ran each
-  one (not how many times it ran);
 - the most recent session's headline and where that card sits now;
 - when it was last active;
 - **git links** — the repo (↗) and the branch (⎇), linked on GitHub remotes. The
@@ -484,10 +482,29 @@ Each row carries:
   the most recent card: a session opened in a sub-folder may never have resolved
   a remote, and blanking the row over that would drop a working link.
 
-Click **Project**, **Sessions** or **Last active** to sort; the choice is
-remembered. The table scrolls inside its own box (header pinned) so a long list
-or a wide path never makes the page scroll sideways. Hover the **Last active**
-cell for the exact times, including when the project's first session ran.
+There is no *Commands* column. The per-project command tags said less than the
+Board tab's **Command** filter already says per session, and they used the width
+that the project path and the last headline need.
+(`/api/projects/summary` still returns the counts; this view does not show
+them.)
+
+**Search.** The **Search** box above the table filters the rows as you type. It
+matches the project name and the full path, so `wamp` finds a project by where
+it is on disk when you cannot remember its name. The line beside the box gives
+the result — "13 of 30 projects match “wamp”, 45 sessions" — so a short table is
+never mistaken for a short history. Press **Escape** to clear the box. The
+search is not remembered between page loads: it is a search, not a setting, and
+a restored query would hide rows for a reason nothing on screen explains.
+
+**Sorting.** Click **Project**, **Sessions** or **Last active** to sort by that
+column. Click the same header again to reverse it. The first click on a column
+uses the useful end of it: names go A→Z, counts and dates lead with the largest
+and the newest. A caret in the header shows the direction, and the column *and*
+the direction are both remembered.
+
+The table scrolls inside its own box (header pinned) so a long list or a wide
+path never makes the page scroll sideways. Hover the **Last active** cell for
+the exact times, including when the project's first session ran.
 
 ## Platform support
 
@@ -545,9 +562,18 @@ data/                board.json, archive.json, settings.json, usage.json,
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
   moves all done cards into the Archive view for long-term keeping.
+- The **Project** filter is a type-to-search box, not a plain dropdown. Click it
+  (or press ↓) to see every project; type any part of a name or a path to narrow
+  the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
+  closes the list and puts the current project back in the box.
+- **↺ Reset filters** clears the **Project**, **Session** and **Command**
+  filters in one press. It does not touch **Show done**, **Fill width** or which
+  cards are expanded — those are display choices, not filters. The button says
+  how many filters are active in its tooltip, and reports "No filters are
+  active" rather than going dead when there is nothing to clear.
 - The count beside each project in the **Project** filter is that project's
   cards on the board, and it follows the **Show done** toggle: with Done hidden
-  it stops counting finished cards, which used to make the dropdown overstate
+  it stops counting finished cards, which used to make the list overstate
   the work in flight. It tracks that toggle and nothing else — the *Session* and
   *Command* filters are applied to the cards already fetched, and once a project
   is selected those are only that project's cards, so there is nothing to

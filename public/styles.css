@@ -180,6 +180,88 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
 .btn-group { display: inline-flex; gap: 6px; }
 
+/* A button that is off rather than disabled: it keeps focus and keeps
+   answering (with "no filters are active"), so it must not look pressable-and-
+   broken. Muted, not greyed to the point of failing contrast — it is still
+   readable text a screen reader will reach. */
+button.is-off { color: var(--muted-2); border-color: var(--border); }
+button.is-off:hover { border-color: var(--border); }
+
+/* ---------- project combobox (replaces the old <select>) ---------- */
+
+.combo-box { position: relative; display: inline-flex; align-items: center; }
+.combo-input {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 30px 7px 11px;   /* room for the ▾ button on the right */
+  width: 190px;
+  cursor: pointer;             /* it opens a list as well as taking text */
+}
+.combo-input::placeholder { color: var(--muted-2); opacity: 1; }
+.combo-input:hover { border-color: var(--muted-2); }
+.combo-input:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+.combo-toggle {
+  position: absolute;
+  right: 1px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 7px 9px;
+  line-height: 1;
+}
+.combo-toggle:hover { color: var(--text); border-color: transparent; }
+
+/* Anchored to the input rather than parked on <body> like the folder menu: the
+   toolbar does not scroll independently, so there is no anchor to chase. The
+   sticky header carries z-index 10, so this needs to clear its own siblings
+   only. */
+.combo-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 100%;
+  max-width: min(420px, 80vw);
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.combo-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.combo-opt-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.combo-opt-count { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+/* The project already in force, when it is not the one under the cursor. */
+.combo-opt.current .combo-opt-label { font-weight: 650; }
+/* aria-activedescendant moves this, not focus, so the highlight IS the focus
+   indicator — it needs a border as well as a fill to survive forced colours. */
+.combo-opt.active { background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--accent-plain); }
+.combo-opt.active .combo-opt-count { color: var(--muted); }
+.combo-empty { padding: 8px 9px; font-size: 12.5px; color: var(--muted-2); }
+
+@media (forced-colors: active) {
+  .combo-opt.active { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .combo-opt.active .combo-opt-count { color: HighlightText; }
+}
+
 .refresh-note { font-size: 12px; color: var(--muted-2); min-width: 120px; text-align: right; }
 /* The filter note sits inline in the topbar rather than pinned to the right
    edge, so it must not reserve .refresh-note's 120px gutter while empty —
@@ -693,7 +775,23 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .projects-head h2 { font-size: 15px; margin: 0; }
 .projects-sub { margin: 0; font-size: 12.5px; color: var(--muted-2); }
 
-/* The table can outgrow the window in both directions (six columns, one of them
+/* Search box over the projects table. It filters rows client-side, so the sub
+   line beside it doubles as the result count — see renderProjects(). */
+.projects-search input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  width: 220px;
+}
+.projects-search input::placeholder { color: var(--muted-2); opacity: 1; }
+.projects-search input:hover { border-color: var(--muted-2); }
+.projects-search input:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+
+/* The table can outgrow the window in both directions (five columns, one of them
    a file path; one row per project ever opened), so it scrolls inside its own
    box rather than making the page scroll sideways. The max-height is what makes
    the sticky header below actually stick: a sticky cell sticks to its nearest
@@ -741,9 +839,12 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
   border-radius: 4px;
 }
 .th-sort:hover { color: var(--text); }
+.th-sort:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
 .th-sort.active { color: var(--accent-plain); }
-.th-sort.active::after { content: ' ▾'; font-size: 9px; }
-.th-sort[data-sort="name"].active::after { content: ' ▴'; }
+/* The caret follows the DIRECTION now, not the column: each header sorts both
+   ways, so a fixed glyph per column would have lied on every second click. */
+.th-sort.desc::after { content: ' ▾'; font-size: 9px; }
+.th-sort.asc::after { content: ' ▴'; font-size: 9px; }
 
 .p-name { min-width: 220px; }
 .p-path {
@@ -756,8 +857,6 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .p-count { white-space: nowrap; }
 .p-total { font-weight: 650; font-size: 15px; }
 .p-split { display: block; margin-top: 3px; font-size: 11px; color: var(--muted-2); }
-.p-cmds { min-width: 150px; }
-.p-cmds .badge { margin: 0 4px 4px 0; }
 .p-last { min-width: 220px; max-width: 380px; }
 .p-last-text { display: block; }
 .p-last-text.auto-title { color: var(--muted); font-style: italic; }

@@ -40,9 +40,23 @@
     <!-- Row 2, inside the same sticky header: board-only controls. Hidden
          outright on the other tabs. -->
     <div class="toolbar" id="boardToolbar">
-      <span class="control">
+      <!-- A combobox rather than a <select>: the list is one row per project
+           folder ever opened, which grows past the point where a native
+           dropdown's first-letter matching is any help. Input + listbox is the
+           ARIA 1.2 pattern; app.js owns the keyboard behaviour. -->
+      <span class="control combo" id="projectCombo">
         <label for="projectFilter">Project</label>
-        <select id="projectFilter"><option value="">All projects</option></select>
+        <span class="combo-box">
+          <input type="text" id="projectFilter" class="combo-input"
+                 role="combobox" aria-expanded="false" aria-controls="projectFilterList"
+                 aria-autocomplete="list" aria-describedby="projectComboHint"
+                 autocomplete="off" spellcheck="false" placeholder="All projects">
+          <button type="button" class="combo-toggle" id="projectFilterToggle"
+                  tabindex="-1" aria-label="Show every project">▾</button>
+          <ul class="combo-list hidden" id="projectFilterList" role="listbox"
+              aria-label="Projects"></ul>
+        </span>
+        <span class="visually-hidden" id="projectComboHint">Type to filter the list. Use the arrow keys to choose a project, Enter to apply it.</span>
       </span>
 
       <span class="control">
@@ -65,6 +79,12 @@
       <!-- role=status so changing the filter announces the result: the board is
            rebuilt wholesale, which a screen reader would otherwise not report. -->
       <span class="refresh-note filter-note" id="lifeNote" role="status" aria-live="polite"></span>
+
+      <!-- Not `disabled` when there is nothing to reset: a button that goes
+           disabled under the press that emptied it drops focus in most
+           browsers. aria-disabled says the same thing and keeps focus put; the
+           handler no-ops and says so in the live region above. -->
+      <button type="button" class="ghost small" id="resetFilters" aria-disabled="true">↺ Reset filters</button>
 
       <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
       <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>
@@ -89,7 +109,16 @@
     <section id="projectsSection" class="projects-view hidden" role="tabpanel" aria-labelledby="tabProjects" tabindex="0">
       <div class="projects-head">
         <h2>All projects</h2>
-        <p class="projects-sub" id="projectsSub"></p>
+        <span class="control projects-search">
+          <label for="projectSearch">Search</label>
+          <input type="search" id="projectSearch" placeholder="Name or path"
+                 autocomplete="off" spellcheck="false">
+        </span>
+        <!-- role=status: the table is rebuilt wholesale as you type, so the
+             match count is the only thing that reports the result. Written only
+             when the text actually changes, so a background refresh does not
+             re-announce the same sentence. -->
+        <p class="projects-sub" id="projectsSub" role="status" aria-live="polite"></p>
       </div>
       <div class="table-scroll" tabindex="0" role="region" aria-label="All projects">
         <table class="projects-table" id="projectsTable">
@@ -98,7 +127,6 @@
             <tr>
               <th scope="col"><button type="button" class="th-sort" data-sort="name">Project</button></th>
               <th scope="col"><button type="button" class="th-sort" data-sort="sessions">Sessions</button></th>
-              <th scope="col">Commands</th>
               <th scope="col">Last session</th>
               <th scope="col"><button type="button" class="th-sort" data-sort="recent">Last active</button></th>
               <th scope="col">Links</th>
