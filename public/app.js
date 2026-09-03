@@ -7,6 +7,12 @@ const state = {
   projectList: [],  // last /api/projects payload, re-rendered when "Show done" flips
   life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
   cmd: '',       // '' | 'any' | '<command>' — client-side skip-command filter (persisted)
+  // The date every column is ordered by, and which end it leads with. One
+  // sort for the whole board rather than one per column: a card's position
+  // then means the same thing wherever it sits, and one control on screen
+  // answers "what order am I looking at". Both persisted.
+  boardSort: 'active',   // 'active' | 'started' | 'updated' | 'ended'
+  boardSortDir: 'desc',  // 'asc' | 'desc'
   showDone: false,
   view: 'board',            // 'board' | 'projects' | 'archive' (persisted)
   counts: null,             // whole-store totals from /api/board, for the tab labels
@@ -54,6 +60,11 @@ function loadPrefs() {
     // that no longer matches any card simply filters to an empty board, which
     // the filter note explains.
     state.cmd = typeof p.cmd === 'string' ? p.cmd.slice(0, 60) : '';
+    // Same guard as the filters, for the same reason: an unknown key would
+    // order every column by a date no card carries, which reads as a scrambled
+    // board with nothing on screen to explain it.
+    state.boardSort = ['active', 'started', 'updated', 'ended'].includes(p.boardSort) ? p.boardSort : 'active';
+    state.boardSortDir = p.boardSortDir === 'asc' || p.boardSortDir === 'desc' ? p.boardSortDir : 'desc';
     state.projectSort = ['recent', 'name', 'sessions'].includes(p.projectSort) ? p.projectSort : 'recent';
     state.projectSortDir = p.projectSortDir === 'asc' || p.projectSortDir === 'desc'
       ? p.projectSortDir
@@ -76,7 +87,7 @@ function savePrefs() {
     const expanded = state.cards.length
       ? Array.from(state.expanded).filter((id) => onBoard.has(id))
       : Array.from(state.expanded);
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, projectSortDir: state.projectSortDir, view: state.view, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, boardSort: state.boardSort, boardSortDir: state.boardSortDir, projectSort: state.projectSort, projectSortDir: state.projectSortDir, view: state.view, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -132,6 +143,7 @@ function repoShortLabel(url) {
 const CMD_TAGS = {
   'git-review': { glyph: '🔍', title: 'Ran the pre-commit review skill in this session' },
   'git-commit-message': { glyph: '✎', title: 'Drafted a commit message in this session' },
+  'pr-description': { glyph: '🔀', title: 'Drafted a pull request description in this session' },
 };
 const CMD_GLYPH_FALLBACK = '⌘';
 
@@ -1523,6 +1535,72 @@ function matchesCommandFilter(card) {
   return state.cmd === 'any' ? names.length > 0 : names.includes(state.cmd);
 }
 
+// ---------- board sort ----------
+
+// The date each sort key reads off a card. All four are ISO-8601 strings
+// written by the same nowIso(), so they compare lexicographically — which is
+// what listCards() already relies on server-side.
+//
+// "started" is deliberately not just createdAt. A session that ran a
+// skip-listed command first (/git-review, /git-commit-message) mints no card
+// until its first real prompt, so createdAt understates when it began;
+// skippedBefore.firstAt holds the real start, and the card already shows it as
+// "session began". Sorting on createdAt alone would file exactly those
+// sessions late, by however long the bookkeeping took.
+const BOARD_SORT_KEYS = {
+  active: (c) => c.lastActiveAt,
+  started: (c) => (c.skippedBefore && c.skippedBefore.firstAt) || c.createdAt,
+  updated: (c) => c.updatedAt,
+  ended: (c) => c.sessionEndedAt,
+};
+
+// Order one column's cards. Written once and given a direction, rather than an
+// ascending and a descending comparator that can quietly disagree — same
+// reasoning as PROJECT_SORTS.
+//
+// Cards with no date for the chosen key go last in BOTH directions instead of
+// sorting as an empty string. "Session ended" is the key that makes this
+// common: it is null for every session still running, and flipping to
+// oldest-first would otherwise bury every live card under a stack of finished
+// ones — the exact opposite of what the board is for.
+//
+// No explicit tiebreak: Array.sort is stable and the server hands cards back
+// newest-active first, so equal timestamps keep that order rather than
+// shuffling on every three-second re-render.
+function sortColumnCards(cards, key, dir) {
+  const at = BOARD_SORT_KEYS[key] || BOARD_SORT_KEYS.active;
+  const sign = dir === 'asc' ? 1 : -1;
+  const dated = [];
+  const undated = [];
+  cards.forEach((c) => { (at(c) ? dated : undated).push(c); });
+  dated.sort((a, b) => sign * String(at(a)).localeCompare(String(at(b))));
+  return dated.concat(undated);
+}
+
+// Label and tooltip for the direction button. Every key is a date, so it says
+// "newest/oldest", which answers the question directly — "ascending" leaves
+// you working out which end of a date that is.
+function syncBoardSortDir() {
+  const btn = document.getElementById('boardSortDir');
+  if (!btn) return;
+  // render() runs on every poll, and rewriting the label of a button somebody
+  // is parked on re-announces it. Only touch it when the direction changed.
+  if (btn.dataset.dir === state.boardSortDir) return;
+  btn.dataset.dir = state.boardSortDir;
+  const asc = state.boardSortDir === 'asc';
+  btn.title = asc
+    ? 'Oldest first. Press to put the newest first.'
+    : 'Newest first. Press to put the oldest first.';
+  // The caret is aria-hidden and the words carry the state, unlike the
+  // Projects table's ::after carets: there the header cell's aria-sort says
+  // which way it goes, and here there is no such cell — the button's own name
+  // has to say it, and a triangle read out after it is only noise.
+  btn.replaceChildren(
+    document.createTextNode(asc ? 'Oldest first' : 'Newest first'),
+    el('span', { class: 'sort-caret', 'aria-hidden': 'true', text: asc ? '▴' : '▾' }, []),
+  );
+}
+
 function render() {
   const board = document.getElementById('boardView');
   // The board is rebuilt wholesale below, so note who holds focus first —
@@ -1550,6 +1628,14 @@ function render() {
     if (!matchesCommandFilter(card)) { hidden++; return; }
     byCol[card.column].push(card);
   });
+
+  // Every column takes the same order. Sorting client-side keeps it a display
+  // choice like the session filter: state.cards already carries every date, so
+  // a change of key or direction costs no round trip.
+  visible.forEach((c) => {
+    byCol[c.key] = sortColumnCards(byCol[c.key], state.boardSort, state.boardSortDir);
+  });
+  syncBoardSortDir();
 
   // An active filter plus an empty board looks identical to a broken board —
   // say which is which.
@@ -2070,6 +2156,21 @@ showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked
 const fillWidthEl = document.getElementById('fillWidth');
 fillWidthEl.checked = state.fillWidth;
 fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.checked; savePrefs(); render(); });
+const boardSortEl = document.getElementById('boardSort');
+boardSortEl.value = state.boardSort;
+// render(), not refresh(): every date the sort reads is already on the cards
+// this tab holds, so there is nothing to re-fetch.
+boardSortEl.addEventListener('change', (e) => { state.boardSort = e.target.value; savePrefs(); render(); });
+const boardSortDirEl = document.getElementById('boardSortDir');
+// Painted here as well as in render(): the board's first fetch can fail (the
+// server still starting), and until one lands this button would otherwise be
+// an empty, focusable control with no accessible name.
+syncBoardSortDir();
+boardSortDirEl.addEventListener('click', () => {
+  state.boardSortDir = state.boardSortDir === 'asc' ? 'desc' : 'asc';
+  savePrefs();
+  render();
+});
 document.getElementById('expandAll').addEventListener('click', () => setAllExpanded(true));
 document.getElementById('collapseAll').addEventListener('click', () => setAllExpanded(false));
 document.getElementById('addColumn').addEventListener('click', addColumn);

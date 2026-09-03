@@ -280,9 +280,9 @@ comment on GitHub unless explicitly asked** — this is enforced by deny rules a
 well as by instruction. `/git-review` is the user's pre-commit gate; running it
 is their move, not yours.
 
-Note the irony worth remembering: `/git-review` and `/git-commit-message` are
-on this project's own skip list, so a session that only runs them leaves no
-card behind.
+Note the irony worth remembering: `/git-review`, `/git-commit-message` and
+`/pr-description` are all on this project's own skip list, so a session that
+only runs them leaves no card behind.
 
 ---
 
