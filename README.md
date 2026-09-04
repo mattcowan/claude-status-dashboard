@@ -183,8 +183,7 @@ session-end — no-ops when the card is absent rather than creating one.
 **Configuring the list.** There is one list, in one place. The shipped default
 is `DEFAULT_COMMANDS` at the top of [`lib/skip-prompts.js`](lib/skip-prompts.js)
 — currently `["git-commit-message", "git-review", "pr-description"]`. Add a
-command there to skip
-it for every install.
+command there to skip it for every install.
 
 To override it on one machine without touching the code, write a JSON array of
 command names (leading slash optional) to `data/skip-prompts.json`:
@@ -464,8 +463,12 @@ alone. Both the date and the direction are remembered between visits. The sort
 acts on the board only: the **Archive** view keeps its own order, and the
 **Projects** table has its own sort.
 
-You can still drag a card to a different column while a sort is active. The
-card takes its place in the new column by the same date.
+You can still drag a card to a different column while a sort is active. Where
+the card lands depends on the sort. A move counts as activity, so it sets both
+**Last active** and **Last updated** to now: under either of those the card
+goes to the top of its new column, or to the bottom with oldest first. Under
+**Started** and **Session ended** the dates do not change, so the card takes
+the place its own date gives it.
 
 ## Views: Board, Projects, Archive
 
@@ -488,7 +491,9 @@ The header is two rows. The top row holds the tabs and the controls that mean
 the same thing everywhere: **Dump done → archive**, **Notify** and the refresh
 clock. **Dump done → archive** sits there because it acts on the stored cards,
 not on what the board is drawing, so it works from any tab — and from
-**Archive** you see the result arrive. The second row holds the board filters
+**Archive** you see the result arrive. That is also why it asks before it
+sweeps whenever a filter is on: the filters are on the second row, which is
+hidden on those tabs, so what the button will take is not on screen. The second row holds the board filters
 and the sort, and it is hidden outright on the Projects and Archive tabs rather
 than left sitting above a view it cannot filter. Both rows are inside the one
 sticky header, so the filters travel with the tabs.
@@ -598,7 +603,11 @@ data/                board.json, archive.json, settings.json, usage.json,
 - The board updates live via SSE (with polling as fallback); drag cards between
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
-  moves all done cards into the Archive view for long-term keeping.
+  moves all done cards into the Archive view for long-term keeping. It sweeps
+  the **whole store** — every done card, in every project — whatever the board
+  is filtered to. So when a **Project**, **Session** or **Command** filter is
+  on, it asks first, gives the true number, and says how many of them your
+  filters actually cover. With no filter on, it stays one press.
 - The **Project** filter is a type-to-search box, not a plain dropdown. Click it
   (or press ↓) to see every project; type any part of a name or a path to narrow
   the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
