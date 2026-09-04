@@ -491,12 +491,13 @@ The header is two rows. The top row holds the tabs and the controls that mean
 the same thing everywhere: **Dump done → archive**, **Notify** and the refresh
 clock. **Dump done → archive** sits there because it acts on the stored cards,
 not on what the board is drawing, so it works from any tab — and from
-**Archive** you see the result arrive. That is also why it asks before it
-sweeps whenever a filter is on: the filters are on the second row, which is
-hidden on those tabs, so what the button will take is not on screen. The second row holds the board filters
-and the sort, and it is hidden outright on the Projects and Archive tabs rather
-than left sitting above a view it cannot filter. Both rows are inside the one
-sticky header, so the filters travel with the tabs.
+**Archive** you see the result arrive. That is also why it asks first when
+your filters hide part of what it will sweep: the filters are on the second
+row, which is hidden on those tabs, so what the button will take is not on
+screen. The second row holds the board filters and the sort, and it is hidden
+outright on the Projects and Archive tabs rather than left sitting above a
+view it cannot filter. Both rows are inside the one sticky header, so the
+filters travel with the tabs.
 
 A **skip link** (first Tab stop) jumps past the whole header to the current
 panel. Your last tab is remembered.
@@ -605,9 +606,10 @@ data/                board.json, archive.json, settings.json, usage.json,
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
   moves all done cards into the Archive view for long-term keeping. It sweeps
   the **whole store** — every done card, in every project — whatever the board
-  is filtered to. So when a **Project**, **Session** or **Command** filter is
-  on, it asks first, gives the true number, and says how many of them your
-  filters actually cover. With no filter on, it stays one press.
+  is filtered to. It asks first when a **Project**, **Session** or **Command**
+  filter hides part of that sweep. It then gives the true number and says how
+  many of them your filters cover. A filter that already covers every done
+  card hides nothing, so it stays one press — as it does with no filter on.
 - The **Project** filter is a type-to-search box, not a plain dropdown. Click it
   (or press ↓) to see every project; type any part of a name or a path to narrow
   the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
