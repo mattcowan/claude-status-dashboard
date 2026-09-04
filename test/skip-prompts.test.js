@@ -35,6 +35,10 @@ test('DEFAULT_COMMANDS pins the shipped skip list', () => {
     skip.DEFAULT_COMMANDS.includes('git-review'),
     'git-review must stay on the shipped skip list'
   );
+  assert.ok(
+    skip.DEFAULT_COMMANDS.includes('pr-description'),
+    'pr-description must stay on the shipped skip list'
+  );
 });
 
 test('commands() returns bare names, no leading slash', () => {

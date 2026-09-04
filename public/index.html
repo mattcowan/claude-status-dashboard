@@ -10,10 +10,16 @@
 <body>
   <a class="skip-link" href="#viewPanels">Skip to the current view</a>
 
-  <!-- Row 1: identity, the view tabs, and the two controls that mean the same
+  <!-- Row 1: identity, the view tabs, and the controls that mean the same
        thing on every tab. Everything that only acts on the board moved down to
        .toolbar, so switching to Projects or Archive doesn't leave five board
-       filters sitting above a view they cannot filter. -->
+       filters sitting above a view they cannot filter.
+
+       "Dump done → archive" belongs up here rather than in .toolbar: it acts on
+       the store, not on what the board is currently drawing, so it means the
+       same thing from every tab — and from Archive it is the tab that shows
+       the result. Moving it also stops .toolbar wrapping to a second line at
+       the widths this is actually used at. -->
   <header class="topbar">
     <h1><span class="dot"></span> Claude Sessions</h1>
 
@@ -31,6 +37,8 @@
         Archive <span class="tab-count" id="tabCountArchive"></span>
       </button>
     </div>
+
+    <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
 
     <span class="spacer"></span>
 
@@ -71,7 +79,7 @@
 
       <span class="control">
         <label for="cmdFilter">Command</label>
-        <select id="cmdFilter" title="Filter by the bookkeeping slash commands a session ran (/git-review, /git-commit-message). Options appear only for commands actually recorded on the board.">
+        <select id="cmdFilter" title="Filter by the bookkeeping slash commands a session ran (/git-review, /git-commit-message, /pr-description). Options appear only for commands actually recorded on the board.">
           <option value="">Any command</option>
         </select>
       </span>
@@ -86,6 +94,21 @@
            handler no-ops and says so in the live region above. -->
       <button type="button" class="ghost small" id="resetFilters" aria-disabled="true">↺ Reset filters</button>
 
+      <!-- Sort is a display choice, not a filter: it sits after ↺ Reset
+           filters, which deliberately leaves it alone, and beside the other
+           display controls. Every key is a date, so one direction button serves
+           all four and can say "newest/oldest" instead of "ascending". -->
+      <span class="control">
+        <label for="boardSort">Sort</label>
+        <select id="boardSort" title="The date every column is ordered by. The same order applies to all columns, and it is remembered between visits.">
+          <option value="active">Last active</option>
+          <option value="started">Started</option>
+          <option value="updated">Last updated</option>
+          <option value="ended">Session ended</option>
+        </select>
+        <button type="button" class="ghost small sort-dir" id="boardSortDir"></button>
+      </span>
+
       <label class="toggle"><input type="checkbox" id="showDone"> Show done</label>
       <label class="toggle"><input type="checkbox" id="fillWidth"> Fill width</label>
       <span class="btn-group">
@@ -93,7 +116,6 @@
         <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
       </span>
       <button type="button" class="ghost small" id="addColumn">＋ Column</button>
-      <button type="button" class="ghost small" id="archiveDone">Dump done → archive</button>
     </div>
   </header>
 

@@ -180,6 +180,13 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 
 .btn-group { display: inline-flex; gap: 6px; }
 
+/* The board's sort-direction button. The caret tracks the direction, the same
+   way the Projects table's header carets do, but it sits in an aria-hidden
+   span rather than a ::after: the words beside it are this button's accessible
+   name, and a triangle read out after them adds nothing. */
+.sort-dir { display: inline-flex; align-items: center; gap: 4px; }
+.sort-caret { font-size: 9px; }
+
 /* A button that is off rather than disabled: it keeps focus and keeps
    answering (with "no filters are active"), so it must not look pressable-and-
    broken. Muted, not greyed to the point of failing contrast — it is still

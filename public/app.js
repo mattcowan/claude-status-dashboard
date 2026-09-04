@@ -7,6 +7,12 @@ const state = {
   projectList: [],  // last /api/projects payload, re-rendered when "Show done" flips
   life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
   cmd: '',       // '' | 'any' | '<command>' — client-side skip-command filter (persisted)
+  // The date every column is ordered by, and which end it leads with. One
+  // sort for the whole board rather than one per column: a card's position
+  // then means the same thing wherever it sits, and one control on screen
+  // answers "what order am I looking at". Both persisted.
+  boardSort: 'active',   // 'active' | 'started' | 'updated' | 'ended'
+  boardSortDir: 'desc',  // 'asc' | 'desc'
   showDone: false,
   view: 'board',            // 'board' | 'projects' | 'archive' (persisted)
   counts: null,             // whole-store totals from /api/board, for the tab labels
@@ -54,6 +60,11 @@ function loadPrefs() {
     // that no longer matches any card simply filters to an empty board, which
     // the filter note explains.
     state.cmd = typeof p.cmd === 'string' ? p.cmd.slice(0, 60) : '';
+    // Same guard as the filters, for the same reason: an unknown key would
+    // order every column by a date no card carries, which reads as a scrambled
+    // board with nothing on screen to explain it.
+    state.boardSort = ['active', 'started', 'updated', 'ended'].includes(p.boardSort) ? p.boardSort : 'active';
+    state.boardSortDir = p.boardSortDir === 'asc' || p.boardSortDir === 'desc' ? p.boardSortDir : 'desc';
     state.projectSort = ['recent', 'name', 'sessions'].includes(p.projectSort) ? p.projectSort : 'recent';
     state.projectSortDir = p.projectSortDir === 'asc' || p.projectSortDir === 'desc'
       ? p.projectSortDir
@@ -76,7 +87,7 @@ function savePrefs() {
     const expanded = state.cards.length
       ? Array.from(state.expanded).filter((id) => onBoard.has(id))
       : Array.from(state.expanded);
-    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, projectSort: state.projectSort, projectSortDir: state.projectSortDir, view: state.view, expanded }));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ fillWidth: state.fillWidth, showDone: state.showDone, notify: state.notify, life: state.life, cmd: state.cmd, boardSort: state.boardSort, boardSortDir: state.boardSortDir, projectSort: state.projectSort, projectSortDir: state.projectSortDir, view: state.view, expanded }));
   } catch (_) { /* best effort */ }
 }
 
@@ -128,10 +139,14 @@ function repoShortLabel(url) {
 // Presentation for the skip-listed bookkeeping commands a card can be tagged
 // with. Anything not listed here still gets a tag, with the generic glyph — the
 // skip list is user-configurable (data/skip-prompts.json), so this map is a
-// nicety for the two built-ins rather than the source of truth for what exists.
+// nicety for the shipped built-ins rather than the source of truth for what
+// exists. Keep it in step with DEFAULT_COMMANDS in lib/skip-prompts.js: a
+// command added there without an entry here still tags, just with the generic
+// glyph.
 const CMD_TAGS = {
   'git-review': { glyph: '🔍', title: 'Ran the pre-commit review skill in this session' },
   'git-commit-message': { glyph: '✎', title: 'Drafted a commit message in this session' },
+  'pr-description': { glyph: '🔀', title: 'Drafted a pull request description in this session' },
 };
 const CMD_GLYPH_FALLBACK = '⌘';
 
@@ -577,9 +592,11 @@ function setOptions(sel, html) {
 // action whose only visible result is "the board got bigger" audible.
 let filterNotice = '';
 
-// The three filters the reset button clears. Show done, Fill width and the
-// expanded set are display preferences rather than filters, and are left alone:
-// resetting them would undo choices the user did not ask about.
+// The three filters the reset button clears. Show done, Fill width, the board
+// sort (key and direction) and the expanded set are display preferences rather
+// than filters, and are all left alone: resetting them would undo choices the
+// user did not ask about. README.md documents that promise for the sort, so
+// adding one of them to the count below would make the manual wrong.
 function activeFilterCount() {
   return (state.project ? 1 : 0) + (state.life ? 1 : 0) + (state.cmd ? 1 : 0);
 }
@@ -1523,6 +1540,100 @@ function matchesCommandFilter(card) {
   return state.cmd === 'any' ? names.length > 0 : names.includes(state.cmd);
 }
 
+// ---------- board sort ----------
+
+// The date each sort key reads off a card. All four are ISO-8601 strings
+// written by the same nowIso(), so they compare lexicographically — which is
+// what listCards() already relies on server-side.
+//
+// "started" is deliberately not just createdAt. A session that ran a
+// skip-listed command first (/git-review, /git-commit-message,
+// /pr-description) mints no card
+// until its first real prompt, so createdAt understates when it began;
+// skippedBefore.firstAt holds the real start, and the card already shows it as
+// "session began". Sorting on createdAt alone would file exactly those
+// sessions late, by however long the bookkeeping took.
+const BOARD_SORT_KEYS = {
+  active: (c) => c.lastActiveAt,
+  started: (c) => (c.skippedBefore && c.skippedBefore.firstAt) || c.createdAt,
+  updated: (c) => c.updatedAt,
+  ended: (c) => c.sessionEndedAt,
+};
+
+// What each key is called out loud. Kept beside the comparators rather than
+// read back off the <select>, so the sentence the live region speaks cannot
+// drift from the option that produced it.
+const BOARD_SORT_LABELS = {
+  active: 'Last active',
+  started: 'Started',
+  updated: 'Last updated',
+  ended: 'Session ended',
+};
+
+// Say what just happened, for the same reason resetFilters() does (see
+// filterNotice): the board is reordered wholesale and a screen reader is told
+// nothing by that on its own.
+//
+// The direction button is the case that needs it. Its own accessible name does
+// change on a press, but an in-place name swap on the already-focused element
+// is announced inconsistently — NVDA and JAWS vary, VoiceOver does not repeat
+// it — so relying on that alone leaves the press silent on some setups. The
+// <select> is self-announcing, and still gets a notice: it speaks only the
+// option name, while the order actually in force is the KEY AND the direction
+// together, which neither control states by itself.
+function announceSort() {
+  const label = BOARD_SORT_LABELS[state.boardSort] || BOARD_SORT_LABELS.active;
+  filterNotice = 'Sorted by ' + label.toLowerCase() + ', ' +
+    (state.boardSortDir === 'asc' ? 'oldest first.' : 'newest first.');
+}
+
+// Order one column's cards. Written once and given a direction, rather than an
+// ascending and a descending comparator that can quietly disagree — same
+// reasoning as PROJECT_SORTS.
+//
+// Cards with no date for the chosen key go last in BOTH directions instead of
+// sorting as an empty string. "Session ended" is the key that makes this
+// common: it is null for every session still running, and flipping to
+// oldest-first would otherwise bury every live card under a stack of finished
+// ones — the exact opposite of what the board is for.
+//
+// No explicit tiebreak: Array.sort is stable and the server hands cards back
+// newest-active first, so equal timestamps keep that order rather than
+// shuffling on every three-second re-render.
+function sortColumnCards(cards, key, dir) {
+  const at = BOARD_SORT_KEYS[key] || BOARD_SORT_KEYS.active;
+  const sign = dir === 'asc' ? 1 : -1;
+  const dated = [];
+  const undated = [];
+  cards.forEach((c) => { (at(c) ? dated : undated).push(c); });
+  dated.sort((a, b) => sign * String(at(a)).localeCompare(String(at(b))));
+  return dated.concat(undated);
+}
+
+// Label and tooltip for the direction button. Every key is a date, so it says
+// "newest/oldest", which answers the question directly — "ascending" leaves
+// you working out which end of a date that is.
+function syncBoardSortDir() {
+  const btn = document.getElementById('boardSortDir');
+  if (!btn) return;
+  // render() runs on every poll, and rewriting the label of a button somebody
+  // is parked on re-announces it. Only touch it when the direction changed.
+  if (btn.dataset.dir === state.boardSortDir) return;
+  btn.dataset.dir = state.boardSortDir;
+  const asc = state.boardSortDir === 'asc';
+  btn.title = asc
+    ? 'Oldest first. Press to put the newest first.'
+    : 'Newest first. Press to put the oldest first.';
+  // The caret is aria-hidden and the words carry the state, unlike the
+  // Projects table's ::after carets: there the header cell's aria-sort says
+  // which way it goes, and here there is no such cell — the button's own name
+  // has to say it, and a triangle read out after it is only noise.
+  btn.replaceChildren(
+    document.createTextNode(asc ? 'Oldest first' : 'Newest first'),
+    el('span', { class: 'sort-caret', 'aria-hidden': 'true', text: asc ? '▴' : '▾' }, []),
+  );
+}
+
 function render() {
   const board = document.getElementById('boardView');
   // The board is rebuilt wholesale below, so note who holds focus first —
@@ -1550,6 +1661,14 @@ function render() {
     if (!matchesCommandFilter(card)) { hidden++; return; }
     byCol[card.column].push(card);
   });
+
+  // Every column takes the same order. Sorting client-side keeps it a display
+  // choice like the session filter: state.cards already carries every date, so
+  // a change of key or direction costs no round trip.
+  visible.forEach((c) => {
+    byCol[c.key] = sortColumnCards(byCol[c.key], state.boardSort, state.boardSortDir);
+  });
+  syncBoardSortDir();
 
   // An active filter plus an empty board looks identical to a broken board —
   // say which is which.
@@ -1940,20 +2059,71 @@ function notifyColumnChanges() {
 
 // Move every card in the Done column into the archive.
 //
-// The Done column's count reflects the active Session filter, but the server
-// archives every done card regardless. Without this check the header could read
-// "1" while the button swept five. Only prompts when the filter is actually
-// hiding something, so the unfiltered flow stays one click as before.
+// "Dump done → archive" is store-wide: store.archiveAllDone() takes every card
+// in the Done column, in every project, whatever the board is filtered to.
+// Nothing about the button says so, and since it moved up into the top row it
+// can be pressed from Projects and Archive, where #boardToolbar is hidden and
+// the active filters are off screen entirely.
+//
+// This check used to look only at the Session filter, and counted against
+// state.cards. Both were wrong in the same direction — they understate the
+// sweep:
+//   * state.cards is the PROJECT-FILTERED payload (refresh() sends ?project=,
+//     the server answers through store.listCards()). Filtered to one project it
+//     cannot even see the other projects' done cards, so the figure it produced
+//     was a fraction of what the button archived.
+//   * the Command filter narrows the board too and was never consulted.
+//   * with Session on "Any state" — the default, and persisted — no prompt
+//     appeared at all.
+//
+// So: confirm whenever any filter is in force, and state the real figure. Each
+// filter narrows what the board represents while leaving the action alone. With
+// no filter active the button is unambiguous (everything done, everywhere) and
+// stays one press, which is the property the old Session-only check existed to
+// protect.
+//
+// The honest total is state.counts.done, which store.counts() computes over the
+// whole board and ships on every /api/board response. It is NOT affected by
+// ?project=, which is exactly why it is the figure to quote here.
 async function archiveDone() {
   const doneCol = state.columns.find((c) => c.kind === 'done');
-  if (doneCol && state.life) {
-    const all = state.cards.filter((c) => c.column === doneCol.key);
-    const hidden = all.filter((c) => sessionState(c) !== state.life).length;
-    if (hidden > 0 && !confirm(
-      'Archive all ' + all.length + ' card' + (all.length === 1 ? '' : 's') +
-      ' in “' + doneCol.label + '”?\n\n' +
-      hidden + ' of them ' + (hidden === 1 ? 'is' : 'are') +
-      ' hidden by the current Session filter and will be archived too.'
+  const active = [];
+  if (state.project) active.push('Project');
+  if (state.life) active.push('Session');
+  if (state.cmd) active.push('Command');
+
+  const total = state.counts && Number.isFinite(state.counts.done) ? state.counts.done : null;
+
+  // How many of those the board can actually account for, under every filter in
+  // force. state.cards is already project-scoped by the fetch, so this is the
+  // Project filter's contribution; Session and Command are applied here the
+  // same way render() applies them.
+  const scoped = doneCol
+    ? state.cards.filter((c) => c.column === doneCol.key &&
+        (!state.life || sessionState(c) === state.life) &&
+        matchesCommandFilter(c)).length
+    : 0;
+
+  // Prompt only when a filter is actually hiding part of the sweep, which is
+  // the property the old Session-only check had and worth keeping: a filter
+  // that happens to cover every done card understates nothing, and a prompt
+  // reading "it covers only 76" out of 76 is just noise.
+  //
+  // total === 0 means there is nothing to sweep at all. A null total (no
+  // successful board fetch yet) still prompts — it cannot prove the figures
+  // agree — and does so without quoting a number it cannot stand behind.
+  if (active.length && total !== 0 && scoped !== total) {
+    const headline = total == null
+      ? 'Archive every done card?'
+      : 'Archive ' + total + ' done card' + (total === 1 ? '' : 's') + '?';
+    if (!confirm(
+      headline + '\n\n' +
+      'This sweeps the whole store — every card in “' +
+      (doneCol ? doneCol.label : 'Done') + '”, in every project.\n\n' +
+      'Your active ' + (active.length === 1 ? 'filter' : 'filters') +
+      ' (' + active.join(', ') + ') ' +
+      (active.length === 1 ? 'does' : 'do') + ' not limit it: ' +
+      (active.length === 1 ? 'it covers' : 'they cover') + ' only ' + scoped + '.'
     )) return;
   }
   await api('POST', '/api/archive-done');
@@ -2070,6 +2240,27 @@ showDoneEl.addEventListener('change', (e) => { state.showDone = e.target.checked
 const fillWidthEl = document.getElementById('fillWidth');
 fillWidthEl.checked = state.fillWidth;
 fillWidthEl.addEventListener('change', (e) => { state.fillWidth = e.target.checked; savePrefs(); render(); });
+const boardSortEl = document.getElementById('boardSort');
+boardSortEl.value = state.boardSort;
+// render(), not refresh(): every date the sort reads is already on the cards
+// this tab holds, so there is nothing to re-fetch.
+boardSortEl.addEventListener('change', (e) => {
+  state.boardSort = e.target.value;
+  savePrefs();
+  announceSort();
+  render();
+});
+const boardSortDirEl = document.getElementById('boardSortDir');
+// Painted here as well as in render(): the board's first fetch can fail (the
+// server still starting), and until one lands this button would otherwise be
+// an empty, focusable control with no accessible name.
+syncBoardSortDir();
+boardSortDirEl.addEventListener('click', () => {
+  state.boardSortDir = state.boardSortDir === 'asc' ? 'desc' : 'asc';
+  savePrefs();
+  announceSort();
+  render();
+});
 document.getElementById('expandAll').addEventListener('click', () => setAllExpanded(true));
 document.getElementById('collapseAll').addEventListener('click', () => setAllExpanded(false));
 document.getElementById('addColumn').addEventListener('click', addColumn);

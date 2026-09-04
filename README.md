@@ -165,7 +165,9 @@ motivating case: it's run inside an already-open, higher-tier session precisely
 to avoid switching models just to draft a commit message. A session that only
 ever does that isn't a task, so it shouldn't appear on the board at all.
 `/git-review` — a read-only pre-commit gate over changes some other session
-already made — is the same shape, and is skipped for the same reason.
+already made — is the same shape, and is skipped for the same reason. So is
+`/pr-description`, which writes up a branch that some other session built. All
+three describe work rather than do it.
 
 `hook-user-prompt` checks the prompt against a **skip list** ([`lib/skip-prompts.js`](lib/skip-prompts.js))
 *before* it contacts or spawns the server, so a session that only runs skipped
@@ -180,14 +182,14 @@ session-end — no-ops when the card is absent rather than creating one.
 
 **Configuring the list.** There is one list, in one place. The shipped default
 is `DEFAULT_COMMANDS` at the top of [`lib/skip-prompts.js`](lib/skip-prompts.js)
-— currently `["git-commit-message", "git-review"]`. Add a command there to skip
-it for every install.
+— currently `["git-commit-message", "git-review", "pr-description"]`. Add a
+command there to skip it for every install.
 
 To override it on one machine without touching the code, write a JSON array of
 command names (leading slash optional) to `data/skip-prompts.json`:
 
 ```json
-["git-commit-message", "git-review", "insights"]
+["git-commit-message", "git-review", "pr-description", "insights"]
 ```
 
 That file **replaces** the default rather than adding to it, so repeat any
@@ -243,14 +245,15 @@ are swept after 7 days. The flag is only applied when that POST is what *creates
 the card — running `/git-commit-message` midway through an established session is
 routine and gets no *started late* badge. It does get a command tag, below.
 
-### Command tags — which sessions ran `/git-review` or `/git-commit-message`
+### Command tags — which sessions ran a skipped command
 
 Skipped commands still say something useful about a session, even though they
-never earn one a card: which sessions have been through the pre-commit gate, and
-which have had a commit message drafted. Cards carry a tag per command —
-**🔍 `/git-review`**, **✎ `/git-commit-message`**, or **⌘ `/name`** for anything
-else on your skip list — with a **×n** run count and the last run time in the
-tooltip.
+never earn one a card: which sessions have been through the pre-commit gate,
+which have had a commit message drafted, and which have had a pull request
+written up. Cards carry a tag per command — **🔍 `/git-review`**,
+**✎ `/git-commit-message`**, **🔀 `/pr-description`**, or **⌘ `/name`** for
+anything else on your skip list — with a **×n** run count and the last run time
+in the tooltip.
 
 The **Command** filter narrows the board to sessions carrying a given tag, or to
 *Ran any of these*. Its options come from the commands actually recorded on the
@@ -433,6 +436,40 @@ open-folder keeps its extra restriction on top of the gate: the path comes only
 from the card record, never from the request body, so it can only ever open a
 folder already on the board.
 
+## Sorting the board
+
+**Sort** in the header sets the order of the cards. One order applies to every
+column, so a card's position means the same thing wherever it is. Choose the
+date to order by, then press the button beside it to reverse the direction.
+
+- **Last active** — the last time the session did something. This is the
+  default.
+- **Started** — when the session began. For a session that ran a bookkeeping
+  command first, this is the earlier "session began" time, not the time the
+  card appeared. See *The ⤴ started late badge* above.
+- **Last updated** — the last time the status changed.
+- **Session ended** — when the session ended.
+
+The button shows the direction in use — **Newest first** or **Oldest first** —
+and its tooltip says what the next press does.
+
+A card with no date for the chosen sort goes to the bottom of its column, in
+both directions. **Session ended** is the sort where this happens most: it is
+empty for every session that still runs, and oldest-first must not bury the
+live cards under the finished ones.
+
+Sorting is a display choice, not a filter, so **↺ Reset filters** leaves it
+alone. Both the date and the direction are remembered between visits. The sort
+acts on the board only: the **Archive** view keeps its own order, and the
+**Projects** table has its own sort.
+
+You can still drag a card to a different column while a sort is active. Where
+the card lands depends on the sort. A move counts as activity, so it sets both
+**Last active** and **Last updated** to now: under either of those the card
+goes to the top of its new column, or to the bottom with oldest first. Under
+**Started** and **Session ended** the dates do not change, so the card takes
+the place its own date gives it.
+
 ## Views: Board, Projects, Archive
 
 The three views are tabs in the header, not three panels that hide each other.
@@ -451,10 +488,16 @@ It is a real `role="tablist"`, so it behaves the way a tab set is supposed to:
   be open for its count to stay current.
 
 The header is two rows. The top row holds the tabs and the controls that mean
-the same thing everywhere (**Notify**, the refresh clock). The second row holds
-the board filters, and it is hidden outright on the Projects and Archive tabs
-rather than left sitting above a view it cannot filter. Both rows are inside the
-one sticky header, so the filters travel with the tabs.
+the same thing everywhere: **Dump done → archive**, **Notify** and the refresh
+clock. **Dump done → archive** sits there because it acts on the stored cards,
+not on what the board is drawing, so it works from any tab — and from
+**Archive** you see the result arrive. That is also why it asks first when
+your filters hide part of what it will sweep: the filters are on the second
+row, which is hidden on those tabs, so what the button will take is not on
+screen. The second row holds the board filters and the sort, and it is hidden
+outright on the Projects and Archive tabs rather than left sitting above a
+view it cannot filter. Both rows are inside the one sticky header, so the
+filters travel with the tabs.
 
 A **skip link** (first Tab stop) jumps past the whole header to the current
 panel. Your last tab is remembered.
@@ -561,7 +604,12 @@ data/                board.json, archive.json, settings.json, usage.json,
 - The board updates live via SSE (with polling as fallback); drag cards between
   columns or use the buttons.
 - "Done" is hidden by default (toggle **Show done**); **Dump done → archive**
-  moves all done cards into the Archive view for long-term keeping.
+  moves all done cards into the Archive view for long-term keeping. It sweeps
+  the **whole store** — every done card, in every project — whatever the board
+  is filtered to. It asks first when a **Project**, **Session** or **Command**
+  filter hides part of that sweep. It then gives the true number and says how
+  many of them your filters cover. A filter that already covers every done
+  card hides nothing, so it stays one press — as it does with no filter on.
 - The **Project** filter is a type-to-search box, not a plain dropdown. Click it
   (or press ↓) to see every project; type any part of a name or a path to narrow
   the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
