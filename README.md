@@ -614,6 +614,12 @@ data/                board.json, archive.json, settings.json, usage.json,
   (or press ↓) to see every project; type any part of a name or a path to narrow
   the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
   closes the list and puts the current project back in the box.
+- When the typed text matches two or more projects, the first option is
+  **All matching "text"**. Choose it, or press **Enter** straight after you
+  type, to show the cards of every project whose name or path contains the
+  text. Its count is the total of those projects' counts. The box then shows
+  the text. A new session in a matching folder also appears. With only one
+  match, **Enter** applies that project.
 - **↺ Reset filters** clears the **Project**, **Session** and **Command**
   filters in one press. It does not touch **Show done**, **Fill width** or which
   cards are expanded — those are display choices, not filters. The button says

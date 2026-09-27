@@ -4,6 +4,10 @@ const state = {
   cards: [],
   columns: [],   // [{key,label,kind,color}] from the server
   project: '',
+  // The "All matching …" choice in the Project filter: a substring, not a
+  // path. Mutually exclusive with `project` — setting one clears the other.
+  // Applied client-side (see render()), and not persisted, like `project`.
+  projectMatch: '',
   projectList: [],  // last /api/projects payload, re-rendered when "Show done" flips
   life: '',      // '' | 'live' | 'idle' | 'ended' — client-side session-state filter (persisted)
   cmd: '',       // '' | 'any' | '<command>' — client-side skip-command filter (persisted)
@@ -424,6 +428,61 @@ function comboMatches(opt, q) {
   return (opt.label + ' ' + opt.path).toLowerCase().includes(q);
 }
 
+// The board-side twin of comboMatches(), for the "All matching …" filter. It
+// must stay the same test over the same two strings: the option promises the
+// cards of the projects listed under it, and a looser or stricter test here
+// would show a board that disagrees with the list the user just chose from.
+function cardMatchesProjectText(card, q) {
+  if (!q) return true;
+  return (String(card.projectLabel || '') + ' ' + String(card.project || '')).toLowerCase().includes(q);
+}
+
+// The options to list for query `q` (already trimmed and lowercased), with the
+// "All matching …" option on top when it earns a place:
+//
+// - While typing, only when TWO or more projects match. With one match the
+//   option would be a duplicate of that project's own row, and putting it first
+//   would change what Enter-after-typing picks for the common case of typing
+//   until one project is left.
+// - While not typing, whenever the match filter is the one in force, so that
+//   opening the list highlights it and Enter straight after ↓ is a no-op — the
+//   same promise openCombo() makes for a single project.
+//
+// `raw` is the query as typed, for display; the filter itself is stored
+// lowercased because every comparison is.
+function comboItems(q, raw) {
+  const items = comboOptions().filter((o) => comboMatches(o, q));
+  const projects = items.filter((o) => o.value);
+  let matchQuery = '';
+  let matchLabel = '';
+  if (q && projects.length >= 2) {
+    matchQuery = q;
+    matchLabel = raw;
+  } else if (!q && state.projectMatch) {
+    matchQuery = state.projectMatch;
+    matchLabel = state.projectMatch;
+  }
+  if (!matchQuery) return items;
+  const counted = q ? projects : comboOptions().filter((o) => o.value && comboMatches(o, matchQuery));
+  items.unshift({
+    kind: 'match',
+    value: '',
+    query: matchQuery,
+    label: 'All matching “' + matchLabel + '”',
+    path: 'Every project whose name or path contains “' + matchLabel + '”',
+    count: counted.reduce((n, o) => n + (o.count || 0), 0),
+  });
+  return items;
+}
+
+// Whether `opt` is the filter currently in force, for the list's "current"
+// marker. "All projects" and the match option both carry value '', so the
+// value alone cannot tell them apart.
+function comboIsCurrent(opt) {
+  if (opt.kind === 'match') return state.projectMatch === opt.query;
+  return !state.projectMatch && opt.value === state.project;
+}
+
 function comboLabelFor(value) {
   if (!value) return '';
   const found = state.projectList.find((p) => p.project === value);
@@ -441,7 +500,9 @@ function syncComboInput() {
   if (!input) return;
   combo.typing = false;
   combo.query = '';
-  const label = comboLabelFor(state.project);
+  // The match filter shows its own text: the box then reads as the search it
+  // is, and clicking back in to refine it starts from what was typed.
+  const label = state.projectMatch || comboLabelFor(state.project);
   if (input.value !== label) input.value = label;
 }
 
@@ -451,7 +512,7 @@ function renderComboList() {
   if (!list || !input) return;
 
   const q = combo.typing ? combo.query.trim().toLowerCase() : '';
-  combo.items = comboOptions().filter((o) => comboMatches(o, q));
+  combo.items = comboItems(q, combo.query.trim());
   if (combo.active >= combo.items.length) combo.active = combo.items.length - 1;
 
   // Read-and-clear before the guard below, so a skipped rebuild does not leave
@@ -466,7 +527,11 @@ function renderComboList() {
   // an OPEN list on that cadence would reset the scroll box the user is reading
   // and destroy the element aria-activedescendant points at, which several
   // screen readers announce again each time.
-  const sig = JSON.stringify([q, combo.active, combo.items.map((o) => [o.value, o.label, o.count])]);
+  // The current-filter pair is in the signature because the "current" marker
+  // is drawn from it: switching between the match option and "All projects"
+  // changes no value or label, and would otherwise leave the old marker up.
+  const sig = JSON.stringify([q, combo.active, state.project, state.projectMatch,
+    combo.items.map((o) => [o.kind || '', o.value, o.label, o.count])]);
   if (list.dataset.sig === sig) return;
   list.dataset.sig = sig;
 
@@ -482,7 +547,7 @@ function renderComboList() {
   combo.items.forEach((opt, i) => {
     const on = i === combo.active;
     const node = el('li', {
-      class: 'combo-opt' + (on ? ' active' : '') + (opt.value === state.project ? ' current' : ''),
+      class: 'combo-opt' + (opt.kind === 'match' ? ' combo-opt-match' : '') + (on ? ' active' : '') + (comboIsCurrent(opt) ? ' current' : ''),
       id: 'pf-opt-' + i,
       role: 'option',
       'aria-selected': on ? 'true' : 'false',
@@ -525,8 +590,8 @@ function openCombo(fromTyping) {
   if (!fromTyping) {
     combo.typing = false;
     combo.query = '';
-    const all = comboOptions();
-    combo.active = Math.max(0, all.findIndex((o) => o.value === state.project));
+    const all = comboItems('', '');
+    combo.active = Math.max(0, all.findIndex(comboIsCurrent));
     // Opening on a project far down a 30-row list must bring it into view.
     combo.scrollToActive = true;
   }
@@ -552,14 +617,17 @@ function closeCombo(revert) {
   if (revert !== false) syncComboInput();
 }
 
-// Apply the option at `i`. The project filter is the one filter the server
-// applies (it is a query parameter on /api/board), so this is the one that
-// needs a round trip rather than a re-render.
+// Apply the option at `i`. A single project is the one filter the server
+// applies (it is a query parameter on /api/board), so moving to or from one
+// needs a round trip. The match option is client-side — it needs the unscoped
+// board, which is exactly what `project: ''` fetches — so switching between it
+// and "All projects" is only a re-render.
 function comboChoose(i) {
   const opt = combo.items[i];
   if (!opt) return;
   const changed = opt.value !== state.project;
   state.project = opt.value;
+  state.projectMatch = opt.kind === 'match' ? opt.query : '';
   closeCombo(false);
   syncComboInput();
   if (changed) refresh();
@@ -598,7 +666,9 @@ let filterNotice = '';
 // user did not ask about. README.md documents that promise for the sort, so
 // adding one of them to the count below would make the manual wrong.
 function activeFilterCount() {
-  return (state.project ? 1 : 0) + (state.life ? 1 : 0) + (state.cmd ? 1 : 0);
+  // The match filter is the Project filter in another form, so it counts once
+  // under that name rather than as a fourth filter the tooltip cannot name.
+  return (state.project || state.projectMatch ? 1 : 0) + (state.life ? 1 : 0) + (state.cmd ? 1 : 0);
 }
 
 function syncResetButton() {
@@ -620,6 +690,7 @@ function resetFilters() {
   }
   const hadProject = !!state.project;
   state.project = '';
+  state.projectMatch = '';
   state.life = '';
   state.cmd = '';
   const lifeEl = document.getElementById('lifeFilter');
@@ -1657,6 +1728,11 @@ function render() {
   let hidden = 0;
   state.cards.forEach((card) => {
     if (!byCol[card.column]) return;
+    // The "All matching …" project filter. Not counted in `hidden`: it is the
+    // Project filter in another form, and a single-project filter never shows
+    // up there either (the server drops those cards before they arrive). The
+    // box itself shows what is in force.
+    if (!cardMatchesProjectText(card, state.projectMatch)) return;
     if (state.life && sessionState(card) !== state.life) { hidden++; return; }
     if (!matchesCommandFilter(card)) { hidden++; return; }
     byCol[card.column].push(card);
@@ -2088,18 +2164,19 @@ function notifyColumnChanges() {
 async function archiveDone() {
   const doneCol = state.columns.find((c) => c.kind === 'done');
   const active = [];
-  if (state.project) active.push('Project');
+  if (state.project || state.projectMatch) active.push('Project');
   if (state.life) active.push('Session');
   if (state.cmd) active.push('Command');
 
   const total = state.counts && Number.isFinite(state.counts.done) ? state.counts.done : null;
 
   // How many of those the board can actually account for, under every filter in
-  // force. state.cards is already project-scoped by the fetch, so this is the
-  // Project filter's contribution; Session and Command are applied here the
-  // same way render() applies them.
+  // force. state.cards is already project-scoped by the fetch for a single
+  // project; the "All matching …" form, and Session and Command, are applied
+  // here the same way render() applies them.
   const scoped = doneCol
     ? state.cards.filter((c) => c.column === doneCol.key &&
+        cardMatchesProjectText(c, state.projectMatch) &&
         (!state.life || sessionState(c) === state.life) &&
         matchesCommandFilter(c)).length
     : 0;
