@@ -5,7 +5,9 @@ const state = {
   columns: [],   // [{key,label,kind,color}] from the server
   project: '',
   // The "All matching …" choice in the Project filter: a substring, not a
-  // path. Mutually exclusive with `project` — setting one clears the other.
+  // path, stored as typed (for display) and folded at every comparison by
+  // foldProjectText(). Mutually exclusive with `project` — setting one clears
+  // the other.
   // Applied client-side (see render()), and not persisted, like `project`.
   projectMatch: '',
   projectList: [],  // last /api/projects payload, re-rendered when "Show done" flips
@@ -421,23 +423,42 @@ function comboOptions() {
   return opts;
 }
 
+// Fold text for a project substring test: lowercase, and every run of / or \
+// becomes one \. This mirrors the separator and case folding of normalizePath()
+// in lib/store.js, minus its trailing-slash strip (a query ending in \ is a
+// meaningful substring, not a path to canonicalize).
+//
+// It matters because the list and the board see DIFFERENT spellings of the same
+// folder: store.projects() groups cards by normalizePath() and gives each group
+// the raw path of its most recent card, while every card keeps its own raw
+// path. A folder recorded as both C:\x\y and c:/x/y is one row in the list, and
+// without this fold a query like "x\y" would count that row and then show only
+// half its cards. Folding the query too means "x/y" finds a folder stored with
+// backslashes, which is what anyone typing a path on Windows expects.
+function foldProjectText(s) {
+  return String(s || '').replace(/[/\\]+/g, '\\').toLowerCase();
+}
+
 // Substring match over the label AND the full path, so "wamp" finds a project
-// by where it lives when you can't remember what it is called.
+// by where it lives when you can't remember what it is called. `q` must already
+// be folded.
 function comboMatches(opt, q) {
   if (!q) return true;
-  return (opt.label + ' ' + opt.path).toLowerCase().includes(q);
+  return foldProjectText(opt.label + ' ' + opt.path).includes(q);
 }
 
 // The board-side twin of comboMatches(), for the "All matching …" filter. It
-// must stay the same test over the same two strings: the option promises the
+// must stay the same test over the same folded strings: the option promises the
 // cards of the projects listed under it, and a looser or stricter test here
 // would show a board that disagrees with the list the user just chose from.
-function cardMatchesProjectText(card, q) {
+// `text` is the raw stored filter; it is folded here.
+function cardMatchesProjectText(card, text) {
+  const q = foldProjectText(text);
   if (!q) return true;
-  return (String(card.projectLabel || '') + ' ' + String(card.project || '')).toLowerCase().includes(q);
+  return foldProjectText(String(card.projectLabel || '') + ' ' + String(card.project || '')).includes(q);
 }
 
-// The options to list for query `q` (already trimmed and lowercased), with the
+// The options to list for query `q` (already trimmed and folded), with the
 // "All matching …" option on top when it earns a place:
 //
 // - While typing, only when TWO or more projects match. With one match the
@@ -448,8 +469,8 @@ function cardMatchesProjectText(card, q) {
 //   opening the list highlights it and Enter straight after ↓ is a no-op — the
 //   same promise openCombo() makes for a single project.
 //
-// `raw` is the query as typed, for display; the filter itself is stored
-// lowercased because every comparison is.
+// `raw` is the query as typed. That is what gets stored and shown back in the
+// box, so "ClientA" stays "ClientA"; every comparison folds it first.
 function comboItems(q, raw) {
   const items = comboOptions().filter((o) => comboMatches(o, q));
   const projects = items.filter((o) => o.value);
@@ -459,7 +480,7 @@ function comboItems(q, raw) {
     matchQuery = q;
     matchLabel = raw;
   } else if (!q && state.projectMatch) {
-    matchQuery = state.projectMatch;
+    matchQuery = foldProjectText(state.projectMatch);
     matchLabel = state.projectMatch;
   }
   if (!matchQuery) return items;
@@ -468,6 +489,7 @@ function comboItems(q, raw) {
     kind: 'match',
     value: '',
     query: matchQuery,
+    raw: matchLabel,
     label: 'All matching “' + matchLabel + '”',
     path: 'Every project whose name or path contains “' + matchLabel + '”',
     count: counted.reduce((n, o) => n + (o.count || 0), 0),
@@ -479,7 +501,7 @@ function comboItems(q, raw) {
 // marker. "All projects" and the match option both carry value '', so the
 // value alone cannot tell them apart.
 function comboIsCurrent(opt) {
-  if (opt.kind === 'match') return state.projectMatch === opt.query;
+  if (opt.kind === 'match') return foldProjectText(state.projectMatch) === opt.query;
   return !state.projectMatch && opt.value === state.project;
 }
 
@@ -511,7 +533,7 @@ function renderComboList() {
   const input = comboInput();
   if (!list || !input) return;
 
-  const q = combo.typing ? combo.query.trim().toLowerCase() : '';
+  const q = combo.typing ? foldProjectText(combo.query.trim()) : '';
   combo.items = comboItems(q, combo.query.trim());
   if (combo.active >= combo.items.length) combo.active = combo.items.length - 1;
 
@@ -627,7 +649,7 @@ function comboChoose(i) {
   if (!opt) return;
   const changed = opt.value !== state.project;
   state.project = opt.value;
-  state.projectMatch = opt.kind === 'match' ? opt.query : '';
+  state.projectMatch = opt.kind === 'match' ? opt.raw : '';
   closeCombo(false);
   syncComboInput();
   if (changed) refresh();
@@ -1577,11 +1599,19 @@ function columnHead(col, count, index, visibleKeys) {
 //
 // A selected value that no longer matches any card is kept as an option so the
 // select never silently reports a different filter than the one in force.
+//
+// Options come only from cards the Project filter lets through. A single
+// project is already applied by the fetch; the "All matching …" form is not,
+// so it is applied here. Without that, a command run only in a non-matching
+// project was offered, and choosing it emptied the board.
 function renderCommandFilter() {
   const sel = document.getElementById('cmdFilter');
   if (!sel) return;
   const names = new Set();
-  state.cards.forEach((c) => skipCommandNames(c).forEach((n) => names.add(n)));
+  state.cards.forEach((c) => {
+    if (!cardMatchesProjectText(c, state.projectMatch)) return;
+    skipCommandNames(c).forEach((n) => names.add(n));
+  });
   if (state.cmd && state.cmd !== 'any') names.add(state.cmd);
   const sorted = Array.from(names).sort();
 
