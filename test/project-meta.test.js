@@ -65,6 +65,23 @@ test('cleanRepoUrl() refuses a link that carries credentials', () => {
   assert.ok(cleanRepoUrl('https://user:token@github.com/owner/repo').error);
 });
 
+// A deliberate asymmetry, pinned so it is not "fixed" by accident. An http(s)
+// link with a user part is refused: that is where a token actually works. A
+// git remote's bare user part is stripped, not refused: an SSH user name is a
+// login, not a secret (SSH authenticates with a key), and valid remotes use
+// users other than "git" — AWS CodeCommit puts the SSH key ID there, Gitea and
+// Forgejo installs use their own. A remote that carries a password does not
+// parse at all, so it is refused.
+test('cleanRepoUrl() strips a bare SSH user, refuses a remote password', () => {
+  assert.deepEqual(cleanRepoUrl('ssh://anyuser@github.com/o/r'), { value: 'https://github.com/o/r' });
+  assert.deepEqual(cleanRepoUrl('gitea@git.example.com:o/r.git'), { value: 'https://git.example.com/o/r' });
+  assert.deepEqual(
+    cleanRepoUrl('ssh://APKAEIBAERJR2EXAMPLE@git-codecommit.us-east-2.amazonaws.com/v1/repos/r'),
+    { value: 'https://git-codecommit.us-east-2.amazonaws.com/v1/repos/r' });
+  assert.ok(cleanRepoUrl('ssh://user:secret@github.com/o/r').error);
+  assert.ok(cleanRepoUrl('user:secret@github.com:o/r').error);
+});
+
 test('cleanRepoUrl() treats empty as "clear the override"', () => {
   assert.deepEqual(cleanRepoUrl('   '), { value: null });
 });
