@@ -133,7 +133,7 @@
         <h2>All projects</h2>
         <span class="control projects-search">
           <label for="projectSearch">Search</label>
-          <input type="search" id="projectSearch" placeholder="Name or path"
+          <input type="search" id="projectSearch" placeholder="Name, path or keyword"
                  autocomplete="off" spellcheck="false">
         </span>
         <!-- role=status: the table is rebuilt wholesale as you type, so the
@@ -164,6 +164,67 @@
       <div class="archive-list" id="archiveList"></div>
     </section>
   </main>
+
+  <!-- The Projects view's edit dialog. A native modal <dialog>: showModal()
+       makes the rest of the page inert, traps Tab, and closes on Escape, which
+       is the whole APG dialog pattern without a hand-rolled focus trap. It sits
+       outside <main> and the table so the per-refresh rebuild of the table can
+       never take the open form with it. Each box's hint is filled in by app.js
+       with the detected value that clearing the box falls back to. -->
+  <dialog id="projectEditDialog" class="project-edit" aria-labelledby="projectEditTitle">
+    <form id="projectEditForm" method="dialog" novalidate>
+      <h2 id="projectEditTitle">Edit project</h2>
+      <p class="pe-path" id="projectEditPath"></p>
+
+      <div class="pe-field">
+        <label for="projectEditLabel">Name</label>
+        <input type="text" id="projectEditLabel" maxlength="80" autocomplete="off"
+               aria-describedby="projectEditLabelHint">
+        <p class="pe-hint" id="projectEditLabelHint"></p>
+      </div>
+
+      <div class="pe-field">
+        <label for="projectEditRepo">Repository link</label>
+        <input type="text" id="projectEditRepo" inputmode="url" maxlength="500"
+               autocomplete="off" spellcheck="false" aria-describedby="projectEditRepoHint">
+        <p class="pe-hint" id="projectEditRepoHint"></p>
+      </div>
+
+      <!-- Repeating field. A fieldset, so the "Other links" legend is announced
+           on entering any of its boxes; app.js builds one row per link, each
+           input named "Label for link N" / "URL for link N". -->
+      <fieldset class="pe-field pe-links">
+        <legend>Other links</legend>
+        <p class="pe-hint" id="projectEditLinksHint">For example, a staging site or a ticket board. A link with no label shows its host name.</p>
+        <ol class="pe-link-list" id="projectEditLinks"></ol>
+        <button type="button" class="small" id="projectEditAddLink">+ Add link</button>
+      </fieldset>
+
+      <div class="pe-field">
+        <label for="projectEditKeywords">Keywords</label>
+        <input type="text" id="projectEditKeywords" autocomplete="off"
+               aria-describedby="projectEditKeywordsHint">
+        <p class="pe-hint" id="projectEditKeywordsHint">Separate keywords with commas. Search on the Projects tab and the Project filter finds them.</p>
+      </div>
+
+      <div class="pe-field">
+        <label for="projectEditNote">Note</label>
+        <textarea id="projectEditNote" rows="3" maxlength="2000"
+                  aria-describedby="projectEditNoteHint"></textarea>
+        <p class="pe-hint" id="projectEditNoteHint">Shows in the project's row on the Projects tab.</p>
+      </div>
+
+      <!-- role=alert: a failed save has to be heard even though focus stays in
+           the box that caused it. Emptied before every attempt so the same
+           message is announced again on a repeat failure. -->
+      <p class="pe-error" id="projectEditError" role="alert"></p>
+
+      <div class="pe-actions">
+        <button type="button" id="projectEditCancel">Cancel</button>
+        <button type="submit" class="primary" id="projectEditSave">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/app.js"></script>
 </body>

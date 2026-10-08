@@ -559,7 +559,9 @@ button.badge.project.path-btn[aria-expanded="true"] { border-color: var(--accent
 .pm-status { font-size: 11.5px; color: var(--muted); padding: 2px 8px; min-height: 0; }
 .pm-status:empty { display: none; }
 .pm-status.bad { color: var(--warn-text); }
-a.badge.repo {
+/* .link is a project's "other link" from the edit dialog: same look as the
+   repo badge, so every outbound link in the Links column reads alike. */
+a.badge.repo, a.badge.link {
   color: var(--accent-plain);
   text-decoration: none;
   max-width: 100%;
@@ -567,7 +569,7 @@ a.badge.repo {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-a.badge.repo:hover { border-color: var(--accent-plain); background: var(--panel-2); }
+a.badge.repo:hover, a.badge.link:hover { border-color: var(--accent-plain); background: var(--panel-2); }
 .badge.model { color: var(--accent-plain); border-color: rgba(76,141,255,.35); background: rgba(76,141,255,.10); }
 .badge.auto { color: var(--warn-text); border-color: rgba(217,138,0,.4); background: rgba(245,166,35,.12); }
 /* Session was kept off the board for its first turns (skip-listed commands) */
@@ -887,6 +889,126 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 .p-links .badge { margin: 0 4px 4px 0; }
 .p-links .placeholder { color: var(--muted-2); }
 .projects-table .col-empty { padding: 30px 12px; }
+
+/* The folder badge and the Edit button share the name cell's first line. */
+.p-name-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.p-edit { color: var(--muted); }
+.p-edit:hover { color: var(--text); }
+.p-edit:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
+/* A real list (so its size is announced), drawn as a row of small tags. */
+.p-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.p-keyword {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+/* pre-line keeps the note's line breaks; the clamp stops a long note from
+   stretching its row. Visual only — the full text stays in the DOM. */
+.p-note {
+  margin: 6px 0 0;
+  max-width: 340px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+/* ----- project edit dialog ----- */
+.project-edit {
+  width: min(520px, calc(100vw - 32px));
+  padding: 0;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.project-edit::backdrop { background: rgba(0, 0, 0, .55); }
+.project-edit form { padding: 18px 20px 16px; }
+.project-edit h2 { font-size: 16px; margin: 0 0 2px; overflow-wrap: anywhere; }
+.pe-path {
+  margin: 0 0 14px;
+  font-size: 11px;
+  color: var(--muted-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  word-break: break-all;
+}
+.pe-field { margin-bottom: 12px; }
+.pe-field label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.pe-field input {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.pe-field input::placeholder { color: var(--muted-2); opacity: 1; }
+.pe-field input:hover { border-color: var(--muted-2); }
+.pe-field input:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+/* The note box shares the inputs' look; selectors kept apart from the input
+   rules above so the link rows' inputs inherit those without the textarea's
+   resize and height. */
+.pe-field textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  resize: vertical;
+  min-height: 64px;
+}
+.pe-field textarea:hover { border-color: var(--muted-2); }
+.pe-field textarea:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+
+/* "Other links": a fieldset reset to look like the other fields, with one
+   grid row per link — label, URL, Remove. The URL takes the spare width. */
+.pe-links { border: 0; padding: 0; margin: 0 0 12px; min-width: 0; }
+.pe-links legend { padding: 0; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.pe-links .pe-hint { margin: 0 0 6px; }
+.pe-link-list { list-style: none; margin: 0; padding: 0; }
+.pe-link {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 2fr) auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.pe-link-remove { color: var(--muted); }
+.pe-link-remove:hover { color: var(--text); }
+.pe-links button:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
+.pe-links button:disabled { opacity: .55; cursor: not-allowed; }
+/* Narrow screens: the label and URL stack, Remove sits under them. */
+@media (max-width: 480px) {
+  .pe-link { grid-template-columns: 1fr auto; }
+  .pe-link-url { grid-column: 1 / -1; grid-row: 2; }
+}
+.pe-hint { margin: 4px 0 0; font-size: 12px; color: var(--muted-2); overflow-wrap: anywhere; }
+.pe-error { margin: 0 0 10px; font-size: 13px; color: var(--danger-text); }
+/* Collapsed, not display:none, when empty: some screen readers skip an alert
+   region that was out of the render tree when its text arrived. */
+.pe-error:empty { margin: 0; }
+.pe-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pe-actions button:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
 
 /* Visually hidden but read aloud — used for the table's <caption>. */
 .visually-hidden {

@@ -62,7 +62,19 @@ lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list — commands that don't earn a card
 lib/origin.js        the Origin + Host gate on every write
 lib/repo.js          resolves a folder's git remote to the GitHub URL the
-                     cards and the Projects "Links" column render
+                     cards and the Projects "Links" column render. Cached
+                     30 s, not for the server's lifetime (issue #29): a
+                     resumed card is refreshed in the background against
+                     its STORED folder (Store.refreshRepoUrl), and a failed
+                     git read never clears a stored link.
+lib/project-meta.js  validation for the Projects view's edit dialog (name,
+                     repo link, other links, keywords, note). The store
+                     keeps the edits in data/projects.json and overlays them
+                     at READ time (projectSummary, projects, withProjectMeta)
+                     — stored cards are never rewritten, so clearing an edit
+                     restores the detected values. Every link lands in an
+                     href, so entries are revalidated on load, not only on
+                     save.
 bin/status.js        the one CLI: hook subcommands, Claude subcommands,
                      ensure-server, session resolution
 public/index.html    markup for all three views (board/projects/archive)

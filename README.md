@@ -517,13 +517,20 @@ Each row carries:
   Explorer / Open in VS Code / Copy path). "Open in Explorer" is pointed at the
   project's most recent card, so the path still comes from a stored record and
   never from the request body;
+- an **✎ Edit** button, and the project's keywords and note if it has them
+  (see [Editing a project](#editing-a-project)). A long note shows its first
+  three lines; hover it for the full text;
 - the total session count, split into *on board / done / archived*;
 - the most recent session's headline and where that card sits now;
 - when it was last active;
 - **git links** — the repo (↗) and the branch (⎇), linked on GitHub remotes. The
   repo URL is taken from the most recent card that *has* one rather than simply
   the most recent card: a session opened in a sub-folder may never have resolved
-  a remote, and blanking the row over that would drop a working link.
+  a remote, and blanking the row over that would drop a working link. A card's
+  link follows its folder's git remote: when you change the remote, a resumed
+  session's card shows the new link within about 30 seconds, with no restart.
+  A card keeps its link when git cannot read a remote. A repository link set in
+  the edit dialog replaces the detected one.
 
 There is no *Commands* column. The per-project command tags said less than the
 Board tab's **Command** filter already says per session, and they used the width
@@ -532,8 +539,9 @@ that the project path and the last headline need.
 them.)
 
 **Search.** The **Search** box above the table filters the rows as you type. It
-matches the project name and the full path, so `wamp` finds a project by where
-it is on disk when you cannot remember its name. The line beside the box gives
+matches the project name, the full path and the project's keywords, so `wamp`
+finds a project by where it is on disk when you cannot remember its name. The
+line beside the box gives
 the result — "13 of 30 projects match “wamp”, 45 sessions" — so a short table is
 never mistaken for a short history. Press **Escape** to clear the box. The
 search is not remembered between page loads: it is a search, not a setting, and
@@ -548,6 +556,39 @@ the direction are both remembered.
 The table scrolls inside its own box (header pinned) so a long list or a wide
 path never makes the page scroll sideways. Hover the **Last active** cell for
 the exact times, including when the project's first session ran.
+
+### Editing a project
+
+Click **✎ Edit** on a row to open the edit dialog. It has these fields:
+
+- **Name** — the name the board, the cards and the **Project** filter show.
+- **Repository link** — the link the repo (↗) and branch (⎇) badges use, on the
+  row and on every card of the project. Use an `http` or `https` link. You can
+  also paste a git remote, such as `git@github.com:owner/repo.git`. The
+  dashboard changes it to a web link. A link that holds a user name or a token
+  is refused.
+- **Other links** — more links for the project, for example a staging site.
+  Click **+ Add link** to add a row, and **Remove** to delete one. Each link has
+  a label and a URL. A link with no label shows its host name. The links show
+  in the row's **Links** column, after the git links. They do not show on
+  cards. A project can have up to 10 links. Each URL must start with `http://`
+  or `https://`, and a URL that holds a user name or a token is refused.
+- **Keywords** — words that the **Search** box and the **Project** filter also
+  match. Separate keywords with commas. A project can have up to 20 keywords, of
+  40 characters or fewer each. Duplicates are removed.
+- **Note** — free text, up to 2000 characters. Line breaks are kept. The note
+  shows in the project's row. Search does not match it.
+
+The project path, and the name and links that git gives, stay the defaults.
+The **Name** and **Repository link** boxes show the value the dashboard found
+by itself. Clear one of these boxes and save to go back to that value.
+**Escape** or **Cancel** closes the dialog without a save. When a save fails,
+the dialog shows why and puts the cursor in the box that has the problem.
+
+The edits apply to the folder, not to one session. They also apply to the cards
+already on the board and in the archive. The stored cards do not change, so
+clearing an edit restores what each card showed before. The edits are kept in
+`data/projects.json`.
 
 ## Platform support
 
@@ -585,11 +626,12 @@ lib/usage.js         usage-limits fetcher + tolerant normalizer (undocumented AP
 lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
 lib/origin.js        the Origin + Host gate on every write
+lib/project-meta.js  checks for the edit dialog (name, links, keywords, note)
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)
 data/                board.json, archive.json, settings.json, usage.json,
-                     skip-prompts.json, skipped-sessions/,
+                     projects.json, skip-prompts.json, skipped-sessions/,
                      server.port/pid/log  (runtime, gitignored)
 ```
 
@@ -611,13 +653,13 @@ data/                board.json, archive.json, settings.json, usage.json,
   many of them your filters cover. A filter that already covers every done
   card hides nothing, so it stays one press — as it does with no filter on.
 - The **Project** filter is a type-to-search box, not a plain dropdown. Click it
-  (or press ↓) to see every project; type any part of a name or a path to narrow
-  the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
+  (or press ↓) to see every project; type any part of a name, a path or a
+  keyword to narrow the list. ↓ and ↑ move through the matches, **Enter** applies one, **Escape**
   closes the list and puts the current project back in the box.
 - When the typed text matches two or more projects, the first option is
   **All matching "text"**. Choose it, or press **Enter** straight after you
-  type, to show the cards of every project whose name or path contains the
-  text. Its count is the total of those projects' counts. The box then shows
+  type, to show the cards of every project whose name, path or keywords
+  contain the text. Its count is the total of those projects' counts. The box then shows
   the text. A new session in a matching folder also appears. With only one
   match, **Enter** applies that project.
 - **↺ Reset filters** clears the **Project**, **Session** and **Command**
