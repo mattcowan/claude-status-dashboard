@@ -13,7 +13,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const { Store } = require('../lib/store');
-const { applyPatch, cleanRepoUrl, cleanLinks, cleanKeywords, cleanNote } = require('../lib/project-meta');
+const { applyPatch, loadEntry, cleanRepoUrl, cleanLinks, cleanKeywords, cleanNote } = require('../lib/project-meta');
 
 const ALPHA = 'C:\\Sites\\alpha';
 
@@ -106,6 +106,52 @@ test('cleanNote() keeps line breaks, folds CRLF, and treats blank as none', () =
   assert.deepEqual(cleanNote('  a  \r\nb\n\n'), { value: 'a\nb' });
   assert.deepEqual(cleanNote(' \n '), { value: null });
   assert.ok(cleanNote('x'.repeat(2001)).error);
+});
+
+test('a link that grows when encoded is refused at save, not deleted at load', () => {
+  // 225 characters typed, 1225 stored: the check must be on what is stored,
+  // or the load-time revalidation refuses what the save accepted.
+  const typed = 'https://example.com/wiki/' + 'é'.repeat(200);
+  assert.match(cleanLinks([{ url: typed }]).error, /^Link 1 is longer than 500 characters once encoded/);
+  assert.match(cleanRepoUrl('https://github.com/o/' + 'é'.repeat(100)).error, /once encoded/);
+  // Anything a save accepts, a load accepts unchanged.
+  const saved = applyPatch(null, {
+    label: 'Alpha', links: [{ label: 'Wiki', url: 'https://example.com/wiki/' + 'é'.repeat(40) }], note: 'n',
+  }).meta;
+  assert.deepEqual(loadEntry(saved), { meta: saved, dropped: [] });
+});
+
+test('loadEntry() drops only the bad field and reports it', () => {
+  const r = loadEntry({
+    label: 'Keep me',
+    repoUrl: 'javascript:alert(1)',
+    keywords: ['k'],
+    note: 'Keep this too',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    junk: 1,
+  });
+  assert.deepEqual(r.meta, { label: 'Keep me', keywords: ['k'], note: 'Keep this too' });
+  assert.equal(r.dropped.length, 1);
+  assert.match(r.dropped[0], /^repoUrl: /);
+});
+
+test('loadEntry() drops one bad link and keeps the others', () => {
+  const r = loadEntry({
+    links: [
+      { label: 'Good', url: 'https://a.example/' },
+      { label: 'Bad', url: 'https://x.example/' + 'a'.repeat(600) },
+      { url: 'https://b.example/' },
+    ],
+  });
+  assert.deepEqual(r.meta.links, [{ label: 'Good', url: 'https://a.example/' }, { url: 'https://b.example/' }]);
+  assert.equal(r.dropped.length, 1);
+  assert.match(r.dropped[0], /^links: Link 2 is longer than/, 'reports the link by its real position');
+});
+
+test('loadEntry() survives a non-object entry', () => {
+  assert.equal(loadEntry('nope').meta, null);
+  assert.equal(loadEntry(null).meta, null);
+  assert.equal(loadEntry([]).dropped.length, 1);
 });
 
 test('applyPatch() changes only the keys sent', () => {

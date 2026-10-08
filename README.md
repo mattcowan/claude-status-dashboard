@@ -527,10 +527,12 @@ Each row carries:
   repo URL is taken from the most recent card that *has* one rather than simply
   the most recent card: a session opened in a sub-folder may never have resolved
   a remote, and blanking the row over that would drop a working link. A card's
-  link follows its folder's git remote: when you change the remote, a resumed
-  session's card shows the new link within about 30 seconds, with no restart.
-  A card keeps its link when git cannot read a remote. A repository link set in
-  the edit dialog replaces the detected one.
+  link follows its folder's git remote, with no restart. The card gets the new
+  link at the session's next prompt or status update. The dashboard keeps a
+  folder's remote for 30 seconds before it reads it again, so a prompt in the
+  first 30 seconds after the change can still show the old link, until the
+  prompt after it. A card keeps its link when git cannot read a remote. A
+  repository link set in the edit dialog replaces the detected one.
 
 There is no *Commands* column. The per-project command tags said less than the
 Board tab's **Command** filter already says per session, and they used the width
@@ -565,14 +567,17 @@ Click **✎ Edit** on a row to open the edit dialog. It has these fields:
 - **Repository link** — the link the repo (↗) and branch (⎇) badges use, on the
   row and on every card of the project. Use an `http` or `https` link. You can
   also paste a git remote, such as `git@github.com:owner/repo.git`. The
-  dashboard changes it to a web link. A link that holds a user name or a token
-  is refused.
+  dashboard changes it to a web link. An `http` or `https` link that holds a
+  user name or a token is refused. In a git remote, the dashboard removes the
+  user part, so no token is saved.
 - **Other links** — more links for the project, for example a staging site.
   Click **+ Add link** to add a row, and **Remove** to delete one. Each link has
   a label and a URL. A link with no label shows its host name. The links show
   in the row's **Links** column, after the git links. They do not show on
   cards. A project can have up to 10 links. Each URL must start with `http://`
-  or `https://`, and a URL that holds a user name or a token is refused.
+  or `https://`, and a URL that holds a user name or a token is refused. A URL
+  can have up to 500 characters after encoding; a non-ASCII letter such as `é`
+  uses 6 of them.
 - **Keywords** — words that the **Search** box and the **Project** filter also
   match. Separate keywords with commas. A project can have up to 20 keywords, of
   40 characters or fewer each. Duplicates are removed.

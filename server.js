@@ -147,9 +147,10 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'GET' && pathname === '/api/projects/summary') {
     return sendJson(res, 200, { projects: store.projectSummary() });
   }
-  // The Projects view's edit dialog: name, repo link and keywords for one
-  // folder. Patch semantics (only the keys sent change); an empty value clears
-  // that override. Gated like every other write, at the top of handleApi.
+  // The Projects view's edit dialog: name, repo link, other links, keywords
+  // and note for one folder. Patch semantics (only the keys sent change); an
+  // empty value clears that field. Gated like every other write, at the top
+  // of handleApi.
   if (method === 'PUT' && pathname === '/api/projects/meta') {
     const body = await readBody(req);
     const r = store.setProjectMeta(body.project, body);
