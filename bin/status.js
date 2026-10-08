@@ -26,6 +26,7 @@ const config = require('../lib/config');
 const { normalizePath } = require('../lib/store');
 const transcript = require('../lib/transcript');
 const skipPrompts = require('../lib/skip-prompts');
+const pendingEnds = require('../lib/pending-ends');
 
 // ---------- tiny HTTP client ----------
 
@@ -91,20 +92,33 @@ async function ensureServer() {
 
 // ---------- input helpers ----------
 
-function readStdin() {
+// `complete(data)`, when given, lets the read finish as soon as the input is
+// whole rather than waiting for stdin to close. Hook input is one JSON object,
+// and an object only parses once its closing brace has arrived, so "parses" is
+// a safe test for "done". It matters for SessionEnd (issue #32): that hook runs
+// under a 1.5 s budget by default, and a parent that is slow to close the pipe
+// would otherwise spend up to 2.5 s of it here on the fallback timer.
+function readStdin(complete) {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve('');
     let data = '';
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (d) => { data += d; });
+    process.stdin.on('data', (d) => {
+      data += d;
+      if (complete && complete(data)) resolve(data);
+    });
     process.stdin.on('end', () => resolve(data));
     process.stdin.on('error', () => resolve(data));
     setTimeout(() => resolve(data), 2500).unref();
   });
 }
 
+function parsesAsObject(raw) {
+  try { const v = JSON.parse(raw); return !!v && typeof v === 'object'; } catch (_) { return false; }
+}
+
 async function readHookInput() {
-  const raw = await readStdin();
+  const raw = await readStdin(parsesAsObject);
   try { return JSON.parse(raw); } catch (_) { return {}; }
 }
 
@@ -277,12 +291,24 @@ async function hookPostEdit() {
   process.exit(0);
 }
 
+// Deliberately does NOT call ensureServer() (issue #32). Claude Code gives the
+// whole SessionEnd phase 1.5 s by default and kills the hook when it runs out,
+// and ensureServer() on a down server is a spawn plus up to 5 s of polling —
+// the hook used to die there, before its POST, and the card never left "idle".
+// Starting the dashboard just to write one timestamp was never worth it anyway.
+//
+// So: one POST with a timeout well inside the budget, and if nothing answered
+// (server down, or too slow), a marker file the server applies when it next
+// runs — see lib/pending-ends.js. A timeout can also fire after the server did
+// apply the end; the marker is then a no-op, because markSessionEnded() leaves
+// an already-ended card alone.
 async function hookSessionEnd() {
   const input = await readHookInput();
-  await ensureServer();
   const session = input.session_id;
   if (session) {
-    await request('POST', '/api/hook/session-end', { session });
+    const at = new Date().toISOString();
+    const r = await request('POST', '/api/hook/session-end', { session }, 900);
+    if (r.down) pendingEnds.write(session, at);
   }
   process.exit(0);
 }

@@ -17,6 +17,10 @@
     "path to your Node binary (e.g. \"C:/Program Files/nodejs/node.exe\", or the",
     "output of `which node`). Hooks do not always inherit your shell's PATH.",
     "",
+    "TIMEOUT: keep \"timeout\": 10 on the SessionEnd hook. Without it Claude",
+    "Code gives every SessionEnd hook together only 1.5 seconds, and kills any",
+    "that are still running. Cards then never turn \"ended\".",
+    "",
     "This key is a comment. It is ignored by Claude Code and can be deleted."
   ],
 
@@ -64,7 +68,8 @@
           {
             "type": "command",
             "command": "node",
-            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-session-end"]
+            "args": ["<DASHBOARD_PATH>/bin/status.js", "hook-session-end"],
+            "timeout": 10
           }
         ]
       }

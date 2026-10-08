@@ -75,6 +75,11 @@ lib/project-meta.js  validation for the Projects view's edit dialog (name,
                      restores the detected values. Every link lands in an
                      href, so entries are revalidated on load, not only on
                      save.
+lib/pending-ends.js  durable SessionEnd markers (issue #32). The SessionEnd
+                     hook runs under a 1.5 s budget and must not spawn the
+                     server, so when the POST finds nobody home it drops a
+                     marker here; server.js drains them at boot and every
+                     minute, applying the hook's own end time.
 bin/status.js        the one CLI: hook subcommands, Claude subcommands,
                      ensure-server, session resolution
 public/index.html    markup for all three views (board/projects/archive)
@@ -103,11 +108,20 @@ Claude Code hook ──► bin/status.js <subcmd> ──► HTTP POST ──► 
 ```
 
 `bin/status.js` calls `ensureServer()` before most requests, which
-health-checks `/api/health` and spawns `server.js` detached if it is down. The
-one deliberate exception is the skip-listed branch of `hook-user-prompt`: a
-session that only ever runs `/git-commit-message` must not start the dashboard
-at all, so that path does its skip-list check against a local file *before* any
-network or spawn.
+health-checks `/api/health` and spawns `server.js` detached if it is down. There
+are two deliberate exceptions:
+
+- The skip-listed branch of `hook-user-prompt`: a session that only ever runs
+  `/git-commit-message` must not start the dashboard at all, so that path does
+  its skip-list check against a local file *before* any network or spawn.
+- `hook-session-end`. Claude Code cuts the whole SessionEnd phase off at
+  **1.5 s** unless a hook declares a `timeout` (the bound is
+  `max(1500, min(largest hook timeout, 60000))` ms, or
+  `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`), and a spawn plus readiness poll
+  cannot fit. It POSTs once with a short timeout and falls back to a
+  `lib/pending-ends.js` marker. Issue #32 was this hook dying inside
+  `ensureServer()`, which left every such card on "idle" forever. Do not put
+  `ensureServer()` back on this path.
 
 ---
 

@@ -39,7 +39,7 @@ its project folder, git remote and branch, the model that did the work, and a
 | Claude runs `status.js done-for-review` | Claude thinks it's ready → **Ready for Review**. |
 | **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
-| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). |
+| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running, the hook leaves a marker file. The server applies the marker when it next starts. |
 | You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. |
 
 The **⚙ auto-captured** badge is the tell: it means the Stop backstop moved the
@@ -72,6 +72,11 @@ into the `hooks` object of your `~/.claude/settings.json`, substituting
 > **Merge, don't replace.** Each event holds an *array* of hook groups and Claude
 > Code runs all of them. If you already have a `Stop` or `UserPromptSubmit` hook,
 > append to that array — pasting over it silently disables what you had.
+
+> **Keep the `SessionEnd` timeout.** The `SessionEnd` entry sets
+> `"timeout": 10`. Without it, Claude Code gives all `SessionEnd` hooks together
+> 1.5 seconds and then stops them. A stopped hook cannot mark the card
+> **ended**, so the card stays **idle**.
 
 Restart Claude Code, send a prompt in any project, and a card should appear.
 If nothing shows up, see [Troubleshooting](#troubleshooting).
@@ -106,6 +111,7 @@ that were already open before you installed the hooks.
 | No cards appear at all | Hooks not firing. Most often `node` isn't on the PATH that Claude Code hands hooks — replace `"command": "node"` with an absolute binary path (e.g. `C:/Program Files/nodejs/node.exe`, or the output of `which node`). |
 | Cards appear but are all italic and **⚙ auto-captured** | Step 2 is missing. The hooks are working; Claude hasn't been told to write a status. |
 | Cards appear for some projects only | A project-level `CLAUDE.md` is in play instead of the global one. |
+| Cards stay **idle** and never turn **ended** | The `SessionEnd` hook has no `"timeout"`, so Claude Code stops it after 1.5 seconds. Add `"timeout": 10` to that hook (see [`examples/settings.hooks.json`](examples/settings.hooks.json)). Sessions that crash, or that close with the computer, never send an end signal. |
 | Port 4787 already in use | Another instance owns it (harmless — the server exits quietly). Change it with the `PORT` env var or by writing a number into `data/server.port`. |
 
 ---
@@ -368,7 +374,16 @@ a fact:
 
 `ended` is written by the `SessionEnd` hook, which is reliable but **not
 guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires
-it. So the absence of an end signal cannot be read as "still running." Earlier
+it. Claude Code also stops `SessionEnd` hooks after 1.5 seconds unless the hook
+sets a `"timeout"` — keep the one in
+[`examples/settings.hooks.json`](examples/settings.hooks.json).
+
+The hook does not start the server, because that takes longer than the time
+limit. If the server is down, the hook writes a marker to `data/pending-ends/`.
+The server applies each marker at startup, and checks again every minute. A
+marker uses the time the session ended, not the time the server read it. The
+server ignores a marker that is older than the card's last activity, because
+that session was resumed after the marker was written. So the absence of an end signal cannot be read as "still running." Earlier
 versions did read it that way, and cards sat there claiming **live** for days.
 
 **This is a longer threshold than the 💤 badge's, on purpose.** The two answer
@@ -632,11 +647,13 @@ lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
 lib/origin.js        the Origin + Host gate on every write
 lib/project-meta.js  checks for the edit dialog (name, links, keywords, note)
+lib/pending-ends.js  SessionEnd markers written while the server was down
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)
 data/                board.json, archive.json, settings.json, usage.json,
                      projects.json, skip-prompts.json, skipped-sessions/,
+                     pending-ends/,
                      server.port/pid/log  (runtime, gitignored)
 ```
 

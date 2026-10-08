@@ -19,6 +19,7 @@ const usage = require('./lib/usage');
 const settings = require('./lib/settings');
 const skipPrompts = require('./lib/skip-prompts');
 const origin = require('./lib/origin');
+const pendingEnds = require('./lib/pending-ends');
 
 const VERSION = require('./package.json').version;
 const store = new Store();
@@ -237,13 +238,15 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, { card });
   }
 
-  // Session end (SessionEnd hook)
+  // Session end (SessionEnd hook). markSessionEnded() answers null for "no
+  // change" (already ended) as well as "no card", so the response reads the
+  // card back rather than echoing that. The hook ignores the body either way.
   if (method === 'POST' && pathname === '/api/hook/session-end') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
-    const card = store.markSessionEnded(body.session);
+    store.markSessionEnded(body.session);
     usage.maybeRefresh();
-    return sendJson(res, 200, { card });
+    return sendJson(res, 200, { card: store.getCard(body.session) });
   }
 
   // Usage limits (undocumented endpoint — see lib/usage.js caveats)
@@ -479,8 +482,22 @@ server.listen(PORT, config.HOST, () => {
   // existed. Async and sequential, AFTER listen: the sync version could stall
   // startup ~2.5s per project.
   setImmediate(backfillRepoUrls);
+  setImmediate(drainPendingEnds);
   applyUsagePollTimer();
 });
+
+// Apply the SessionEnd markers hooks left while this server was down (issue
+// #32 — see lib/pending-ends.js). At boot, because a down server is exactly
+// when they are written; and on an interval as well, because a hook can find
+// the port closed in the second before a starting server binds it, and that
+// marker would otherwise wait for the next restart. A readdir of a directory
+// that is almost always empty is cheap enough to run every minute.
+function drainPendingEnds() {
+  try {
+    pendingEnds.drain((session, at) => !!store.markSessionEnded(session, { at: at }));
+  } catch (_) { /* best effort */ }
+}
+setInterval(drainPendingEnds, 60 * 1000).unref();
 
 async function backfillRepoUrls() {
   for (const card of store.listCards(null)) {
