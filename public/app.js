@@ -417,6 +417,7 @@ function comboOptions() {
       value: p.project,
       label: p.projectLabel,
       path: p.project,
+      keywords: p.keywords || [],
       count: state.showDone ? p.count : (p.activeCount != null ? p.activeCount : p.count),
     });
   });
@@ -439,23 +440,35 @@ function foldProjectText(s) {
   return String(s || '').replace(/[/\\]+/g, '\\').toLowerCase();
 }
 
-// Substring match over the label AND the full path, so "wamp" finds a project
-// by where it lives when you can't remember what it is called. `q` must already
-// be folded.
+// The one string both project matchers below search, so they cannot drift
+// apart: the label, the full path, and the keywords set in the Projects view's
+// edit dialog. Keywords are joined with a newline, which no query can contain
+// (the box is a single-line input), so a query cannot match across the end of
+// one keyword and the start of the next and find a word nobody typed.
+function projectSearchText(label, path, keywords) {
+  return foldProjectText(String(label || '') + ' ' + String(path || '') + '\n' +
+    (keywords || []).join('\n'));
+}
+
+// Substring match over the label, the full path and the keywords, so "wamp"
+// finds a project by where it lives when you can't remember what it is called.
+// `q` must already be folded.
 function comboMatches(opt, q) {
   if (!q) return true;
-  return foldProjectText(opt.label + ' ' + opt.path).includes(q);
+  return projectSearchText(opt.label, opt.path, opt.keywords).includes(q);
 }
 
 // The board-side twin of comboMatches(), for the "All matching …" filter. It
 // must stay the same test over the same folded strings: the option promises the
 // cards of the projects listed under it, and a looser or stricter test here
 // would show a board that disagrees with the list the user just chose from.
+// The server copies each project's label override and keywords onto its cards
+// (store.withProjectMeta), which is what lets this test read them off the card.
 // `text` is the raw stored filter; it is folded here.
 function cardMatchesProjectText(card, text) {
   const q = foldProjectText(text);
   if (!q) return true;
-  return foldProjectText(String(card.projectLabel || '') + ' ' + String(card.project || '')).includes(q);
+  return projectSearchText(card.projectLabel, card.project, card.projectKeywords).includes(q);
 }
 
 // The options to list for query `q` (already trimmed and folded), with the
@@ -491,7 +504,7 @@ function comboItems(q, raw) {
     query: matchQuery,
     raw: matchLabel,
     label: 'All matching “' + matchLabel + '”',
-    path: 'Every project whose name or path contains “' + matchLabel + '”',
+    path: 'Every project whose name, path or keywords contain “' + matchLabel + '”',
     count: counted.reduce((n, o) => n + (o.count || 0), 0),
   });
   return items;
@@ -756,16 +769,26 @@ const PROJECT_SORTS = {
 // column exists to answer. Clicking the active column flips it.
 const PROJECT_SORT_DEFAULT_DIR = { recent: 'desc', name: 'asc', sessions: 'desc' };
 
-// Free-text match over the label and the full path, so a project is findable
-// either by what it is called or by where it lives on disk.
+// Free-text match over the label, the full path and the keywords, so a project
+// is findable by what it is called, by where it lives on disk, or by a word the
+// user attached to it in the edit dialog. Keywords join with a newline for the
+// reason given at projectSearchText().
 function projectMatches(row, q) {
   if (!q) return true;
-  return (String(row.projectLabel || '') + ' ' + String(row.project || '')).toLowerCase().includes(q);
+  return (String(row.projectLabel || '') + ' ' + String(row.project || '') + '\n' +
+    (row.keywords || []).join('\n')).toLowerCase().includes(q);
 }
 
 function renderProjects() {
   const body = document.getElementById('projectsBody');
   if (!body) return;
+  // The rebuild below runs on every refresh and every SSE event, and would drop
+  // keyboard focus to <body> whenever it sat on a row's Edit button — which is
+  // exactly where it is put back after a save, one refresh before the next.
+  // Remember which project's button had it and focus the replacement.
+  const focusedEdit = body.contains(document.activeElement) &&
+    document.activeElement.classList.contains('p-edit')
+    ? document.activeElement.dataset.editKey : null;
   body.innerHTML = '';
 
   const q = state.projectQuery.trim().toLowerCase();
@@ -823,6 +846,11 @@ function renderProjects() {
   }
 
   rows.forEach((row) => body.appendChild(projectRowNode(row)));
+  if (focusedEdit) {
+    const again = Array.from(body.querySelectorAll('.p-edit'))
+      .find((b) => b.dataset.editKey === focusedEdit);
+    if (again) again.focus();
+  }
 
   // The table is rebuilt on every refresh, so an open folder menu belonging to
   // one of these rows has just lost its anchor node — same problem the board
@@ -896,7 +924,20 @@ function projectRowNode(row) {
       ? el('a', { class: 'badge branch', href: branchUrl, target: '_blank', rel: 'noopener noreferrer', title: 'Open branch on GitHub' }, ['⎇ ' + row.gitBranch])
       : el('span', { class: 'badge branch', title: 'Git branch of the most recent session' }, ['⎇ ' + row.gitBranch]));
   }
-  if (!row.repoUrl && !row.gitBranch) {
+  // The user's other links (edit dialog) follow the git ones, which stay first
+  // because they are the default every project gets. The server only stores
+  // http(s) URLs, and checks again when it loads the file, so these hrefs
+  // cannot carry a javascript: link.
+  (row.links || []).forEach((l) => {
+    links.appendChild(el('a', {
+      class: 'badge link',
+      href: l.url,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      title: l.url,
+    }, ['↗ ' + (l.label || linkHost(l.url))]));
+  });
+  if (!row.repoUrl && !row.gitBranch && !(row.links || []).length) {
     links.appendChild(el('span', { class: 'placeholder', text: '—' }, []));
   }
 
@@ -907,11 +948,26 @@ function projectRowNode(row) {
   // skipCommands (the cards use it, and store-projects.test.js pins it) — this
   // view just does not spend a column on it.
 
+  // Keywords are shown, not just searched: a row that matched on a word found
+  // nowhere else on it would otherwise look like a false hit.
+  const keywords = (row.keywords || []).length
+    ? el('ul', { class: 'p-keywords', 'aria-label': 'Keywords' },
+      row.keywords.map((k) => el('li', { class: 'p-keyword', text: k }, [])))
+    : null;
+
   return el('tr', {}, [
     el('td', { class: 'p-name' }, [
-      projectFolderButton(row),
+      el('div', { class: 'p-name-head' }, [
+        projectFolderButton(row),
+        projectEditButton(row),
+      ]),
       el('div', { class: 'p-path', title: row.project, text: shortPath(row.project) }, []),
-    ]),
+      keywords,
+      // Clamped to a few lines by CSS so one long note cannot make its row
+      // tower over the table. The clamp is visual only: the full text is still
+      // in the DOM for a screen reader, and in the tooltip for a mouse.
+      row.note ? el('p', { class: 'p-note', title: row.note, text: row.note }, []) : null,
+    ].filter(Boolean)),
     el('td', { class: 'p-count' }, [
       el('span', { class: 'p-total', text: String(row.total) }, []),
       parts.length ? el('span', { class: 'p-split', text: parts.join(' · ') }, []) : null,
@@ -933,6 +989,223 @@ function projectRowNode(row) {
     links,
   ]);
 }
+
+// ---------- project edit dialog ----------
+
+// A stable identity for a project row across table rebuilds. The row's path
+// spelling can flip to whichever card was most recent, so the key is folded the
+// way the server groups rows (normalizePath), not the raw path.
+function projectKey(path) {
+  return foldProjectText(path).replace(/\\+$/, '');
+}
+
+// The project whose edits the dialog holds, or null while it is closed. Set at
+// open time and never re-read from state.projectRows: the table refreshes under
+// an open dialog, and the form must keep what the user is typing.
+let editingProject = null;
+
+function projectEditButton(row) {
+  const label = row.projectLabel || '(unknown)';
+  const btn = el('button', {
+    type: 'button',
+    class: 'small ghost p-edit',
+    'data-edit-key': projectKey(row.project),
+    // The visible text is the same "Edit" on every row, so the accessible name
+    // carries the project — a screen reader's button list would otherwise read
+    // "Edit, Edit, Edit".
+    'aria-label': 'Edit project ' + label,
+    title: 'Edit name, links, keywords and note',
+  }, ['✎ Edit']);
+  btn.addEventListener('click', () => openProjectEdit(row));
+  return btn;
+}
+
+function openProjectEdit(row) {
+  const dlg = document.getElementById('projectEditDialog');
+  if (!dlg || dlg.open) return;
+  const o = row.override || {};
+  editingProject = row.project;
+
+  document.getElementById('projectEditTitle').textContent = 'Edit ' + (row.projectLabel || 'project');
+  document.getElementById('projectEditPath').textContent = row.project;
+  document.getElementById('projectEditLabel').value = o.label || '';
+  document.getElementById('projectEditRepo').value = o.repoUrl || '';
+  document.getElementById('projectEditKeywords').value = (o.keywords || []).join(', ');
+  document.getElementById('projectEditNote').value = o.note || '';
+  const list = document.getElementById('projectEditLinks');
+  list.innerHTML = '';
+  (o.links || []).forEach((l) => list.appendChild(linkRowNode(l)));
+  renumberLinkRows();
+
+  // The detected value goes in the placeholder AND the hint. The placeholder
+  // shows what an empty box means at a glance; the hint is what a screen reader
+  // hears (placeholders are not reliably announced, and vanish on typing).
+  const detectedLabel = row.detectedLabel || row.projectLabel || '';
+  const detectedRepo = row.detectedRepoUrl || '';
+  document.getElementById('projectEditLabel').placeholder = detectedLabel;
+  document.getElementById('projectEditRepo').placeholder = detectedRepo || 'https://github.com/owner/repo';
+  document.getElementById('projectEditLabelHint').textContent =
+    'Leave empty to use the folder name: ' + detectedLabel + '.';
+  document.getElementById('projectEditRepoHint').textContent = detectedRepo
+    ? 'Leave empty to use the link from git: ' + detectedRepo + '.'
+    : 'No link was found in git. Leave empty for no link.';
+  document.getElementById('projectEditError').textContent = '';
+
+  dlg.showModal();
+  document.getElementById('projectEditLabel').focus();
+}
+
+async function saveProjectEdit(e) {
+  e.preventDefault(); // method=dialog would close the dialog before the save is known to have worked
+  const dlg = document.getElementById('projectEditDialog');
+  const errEl = document.getElementById('projectEditError');
+  const saveBtn = document.getElementById('projectEditSave');
+  if (!editingProject) { dlg.close(); return; }
+  errEl.textContent = '';
+  saveBtn.disabled = true;
+  let r;
+  try {
+    r = await api('PUT', '/api/projects/meta', {
+      project: editingProject,
+      label: document.getElementById('projectEditLabel').value,
+      repoUrl: document.getElementById('projectEditRepo').value,
+      keywords: document.getElementById('projectEditKeywords').value,
+      links: collectLinkRows(),
+      note: document.getElementById('projectEditNote').value,
+    });
+  } catch (_) {
+    r = { ok: false, json: null };
+  }
+  saveBtn.disabled = false;
+  if (!r.ok) {
+    errEl.textContent = (r.json && r.json.error) || 'The project could not be saved.';
+    focusErrorField(errEl.textContent);
+    return;
+  }
+  // Wait for the fresh rows before closing, so the close handler can hand focus
+  // to this project's rebuilt Edit button rather than to a detached node.
+  await refreshProjectRows();
+  refresh();
+  dlg.close();
+}
+
+// Put focus on the box a server message is about, when it is clear which one.
+// lib/project-meta.js words its messages for this: other-link errors name the
+// row ("Link 2 needs a URL."), repository-link errors say "repository link".
+// Checked in that order, because both kinds mention a link.
+function focusErrorField(message) {
+  const msg = String(message).toLowerCase();
+  const row = msg.match(/\blink (\d+)\b/);
+  let target = null;
+  if (row) {
+    const li = document.querySelectorAll('#projectEditLinks .pe-link')[Number(row[1]) - 1];
+    if (li) target = li.querySelector(/label/.test(msg) ? '.pe-link-label' : '.pe-link-url');
+  } else if (/repository|remote/.test(msg)) {
+    target = document.getElementById('projectEditRepo');
+  } else if (/keyword/.test(msg)) {
+    target = document.getElementById('projectEditKeywords');
+  } else if (/note/.test(msg)) {
+    target = document.getElementById('projectEditNote');
+  } else if (/name/.test(msg)) {
+    target = document.getElementById('projectEditLabel');
+  }
+  if (target) target.focus();
+}
+
+// "https://staging.example.com/x" -> "staging.example.com", the visible text of
+// an other link saved with no label.
+function linkHost(url) {
+  try { return new URL(url).host || url; } catch (_) { return url; }
+}
+
+// Mirrors MAX_LINKS in lib/project-meta.js. The server is the one that
+// enforces it; this only stops the Add button from offering an 11th row the
+// save would refuse.
+const MAX_PROJECT_LINKS = 10;
+
+// One row of the repeating "Other links" field. The inputs have no visible
+// <label> each (two column-like boxes repeated per row would be a wall of
+// "Label / URL" text), so each one's accessible name carries the row number,
+// which renumberLinkRows() keeps right after an add or a removal.
+function linkRowNode(link) {
+  const labelInput = el('input', {
+    type: 'text', class: 'pe-link-label', maxlength: '40', autocomplete: 'off', placeholder: 'Label',
+  }, []);
+  const urlInput = el('input', {
+    type: 'text', class: 'pe-link-url', inputmode: 'url', maxlength: '500',
+    autocomplete: 'off', spellcheck: 'false', placeholder: 'https://…',
+  }, []);
+  labelInput.value = (link && link.label) || '';
+  urlInput.value = (link && link.url) || '';
+  const remove = el('button', { type: 'button', class: 'small ghost pe-link-remove' }, ['Remove']);
+  const li = el('li', { class: 'pe-link' }, [labelInput, urlInput, remove]);
+  remove.addEventListener('click', () => {
+    // Focus goes to the row that slides into this one's place, else the row
+    // above, else the Add button — never to <body>, which is where it would
+    // land if the focused button were simply removed.
+    const next = li.nextElementSibling || li.previousElementSibling;
+    li.remove();
+    renumberLinkRows();
+    if (next) next.querySelector('.pe-link-label').focus();
+    else document.getElementById('projectEditAddLink').focus();
+  });
+  return li;
+}
+
+function renumberLinkRows() {
+  const rows = document.querySelectorAll('#projectEditLinks .pe-link');
+  rows.forEach((li, i) => {
+    const n = i + 1;
+    li.querySelector('.pe-link-label').setAttribute('aria-label', 'Label for link ' + n);
+    li.querySelector('.pe-link-url').setAttribute('aria-label', 'URL for link ' + n);
+    li.querySelector('.pe-link-remove').setAttribute('aria-label', 'Remove link ' + n);
+  });
+  const add = document.getElementById('projectEditAddLink');
+  if (add) add.disabled = rows.length >= MAX_PROJECT_LINKS;
+}
+
+// Every row as sent, empty ones included: the server drops a row with both
+// boxes empty, and its "Link N" messages count the rows exactly as they appear
+// here, so filtering on this side would make those numbers point at the wrong
+// row.
+function collectLinkRows() {
+  return Array.from(document.querySelectorAll('#projectEditLinks .pe-link')).map((li) => ({
+    label: li.querySelector('.pe-link-label').value,
+    url: li.querySelector('.pe-link-url').value,
+  }));
+}
+
+(function wireProjectEdit() {
+  const dlg = document.getElementById('projectEditDialog');
+  if (!dlg) return;
+  document.getElementById('projectEditForm').addEventListener('submit', saveProjectEdit);
+  document.getElementById('projectEditAddLink').addEventListener('click', () => {
+    const list = document.getElementById('projectEditLinks');
+    if (list.children.length >= MAX_PROJECT_LINKS) return;
+    const li = linkRowNode(null);
+    list.appendChild(li);
+    renumberLinkRows();
+    li.querySelector('.pe-link-label').focus();
+  });
+  document.getElementById('projectEditCancel').addEventListener('click', () => dlg.close());
+  // No close on backdrop click, deliberately: a text selection started in an
+  // input and released outside the form dispatches its click on the <dialog>
+  // itself, which would throw away whatever was typed. Escape and Cancel close.
+  dlg.addEventListener('close', () => {
+    const key = editingProject ? projectKey(editingProject) : '';
+    editingProject = null;
+    // The browser returns focus to the element that opened the dialog, but the
+    // table is rebuilt on every refresh, so that button is usually gone by now.
+    // Focus its replacement instead; failing that, the table's scroll box.
+    const btn = key && Array.from(document.querySelectorAll('.p-edit'))
+      .find((b) => b.dataset.editKey === key);
+    if (btn) btn.focus();
+    else if (document.activeElement === document.body) {
+      const box = document.querySelector('#projectsSection .table-scroll');
+      if (box) box.focus();
+    }
+  });
+})();
 
 async function refreshArchive() {
   const data = (await api('GET', '/api/archive')).json;

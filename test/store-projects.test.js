@@ -52,6 +52,9 @@ function fixture(boardCards, archiveCards) {
   s._archiveDirty = false;
   s.board = { version: 1, columns: s.board.columns, cards: {} };
   s.archive = { version: 1, cards: {} };
+  // The constructor also reads data/projects.json; the user's real edits must
+  // not leak into the rows these tests assert on.
+  s.projectMeta = { version: 1, projects: {} };
   (boardCards || []).forEach((c) => { s.board.cards[c.id] = c; });
   (archiveCards || []).forEach((c) => { s.archive.cards[c.id] = c; });
   return s;

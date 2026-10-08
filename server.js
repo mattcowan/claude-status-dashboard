@@ -130,7 +130,7 @@ async function handleApi(req, res, pathname, query) {
   }
   if (method === 'GET' && pathname === '/api/board') {
     return sendJson(res, 200, {
-      cards: store.listCards(query.project || null),
+      cards: store.withProjectMeta(store.listCards(query.project || null)),
       columns: store.listColumns(),
       // Whole-store totals for the view tabs, so the Archive and Projects tabs
       // can show a count without the board fetching either view.
@@ -147,8 +147,18 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'GET' && pathname === '/api/projects/summary') {
     return sendJson(res, 200, { projects: store.projectSummary() });
   }
+  // The Projects view's edit dialog: name, repo link, other links, keywords
+  // and note for one folder. Patch semantics (only the keys sent change); an
+  // empty value clears that field. Gated like every other write, at the top
+  // of handleApi.
+  if (method === 'PUT' && pathname === '/api/projects/meta') {
+    const body = await readBody(req);
+    const r = store.setProjectMeta(body.project, body);
+    if (r.error) return sendJson(res, r.status || 400, { error: r.error });
+    return sendJson(res, 200, { meta: r.meta });
+  }
   if (method === 'GET' && pathname === '/api/archive') {
-    return sendJson(res, 200, { cards: store.listArchive() });
+    return sendJson(res, 200, { cards: store.withProjectMeta(store.listArchive()) });
   }
 
   // Session upsert (first-prompt hook / CLI)
@@ -172,8 +182,16 @@ async function handleApi(req, res, pathname, query) {
     if (isNew && body.source !== 'prompt' && skipPrompts.hasPendingSkip(body.session)) {
       return sendJson(res, 200, { card: null, suppressed: true });
     }
-    const repoUrl = body.project ? repo.webUrl(body.project) : null;
+    // A new card gets its link synchronously, so it is in this response. An
+    // existing card is refreshed in the background instead (issue #29): this
+    // POST runs on every prompt and every status.js call, and a resumed card
+    // must pick up a changed remote rather than keep the link it saw at
+    // creation. The refresh reads the card's STORED folder, not body.project —
+    // status.js sends its own cwd, which can be a sub-folder or somewhere else
+    // entirely, and must not relink the card to that.
+    const repoUrl = isNew && body.project ? repo.webUrl(body.project) : null;
     const card = store.upsertSession(body.session, body.project, body.source, repoUrl, body.model);
+    if (!isNew && card.project) refreshCardRepo(card.id, card.project);
     store.setSessionMeta(body.session, body);
     if (isNew && body.skippedBefore) store.noteSkippedBefore(body.session, body.skippedBefore);
     usage.maybeRefresh();
@@ -472,6 +490,16 @@ async function backfillRepoUrls() {
       if (link) store.setRepoUrl(card.id, link);
     } catch (_) { /* best effort */ }
   }
+}
+
+// Fire-and-forget: re-read a resumed card's git remote and update its link if
+// the remote changed. Never awaited by the request, so a slow or missing git
+// costs the hook nothing; repo.webUrlAsync's short-lived cache and shared
+// in-flight read keep a burst of prompts to one spawn.
+function refreshCardRepo(id, project) {
+  repo.webUrlAsync(project)
+    .then((link) => { if (link) store.refreshRepoUrl(id, link); })
+    .catch(() => { /* best effort */ });
 }
 
 // Optional background polling of the usage endpoint — an opt-in setting,
