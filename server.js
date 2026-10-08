@@ -334,6 +334,20 @@ async function handleApi(req, res, pathname, query) {
       if (!card) return sendJson(res, 404, { error: 'card not found or bad column' });
       return sendJson(res, 200, { card });
     }
+    // A session marking its own card ended (`status.js end`, issue #33). The
+    // write gate at the top already applies; this adds the user's setting on
+    // top, which is off by default. Refused with 409 and `disabled: true`
+    // rather than 403 so the CLI can tell "the setting is off" (say so, and
+    // stop) from "forbidden" (something is wrong). It never moves the card:
+    // ended is not Done.
+    if (method === 'POST' && action === 'self-end') {
+      if (!settings.getSettings().selfEnd.enabled) {
+        return sendJson(res, 409, { error: 'self-end is turned off in the dashboard settings', disabled: true });
+      }
+      if (!store.getCard(id)) return sendJson(res, 404, { error: 'card not found' });
+      store.markSessionEnded(id, { by: 'self' });
+      return sendJson(res, 200, { card: store.getCard(id) });
+    }
     if (method === 'POST' && action === 'external-edit') {
       const body = await readBody(req);
       const card = store.addExternalEdit(id, body.file);

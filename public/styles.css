@@ -1007,6 +1007,16 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 /* Collapsed, not display:none, when empty: some screen readers skip an alert
    region that was out of the render tree when its text arrived. */
 .pe-error:empty { margin: 0; }
+/* Settings dialog: the project editor's shell with one fieldset per area. Its
+   own field classes, because .pe-field input is width:100% and would stretch
+   a checkbox across the dialog. */
+.st-group { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
+.st-group legend { padding: 0; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.st-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.st-check input:focus-visible,
+.st-row select:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
+.st-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+.st-group code { font-size: 12px; }
 .pe-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .pe-actions button:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
 

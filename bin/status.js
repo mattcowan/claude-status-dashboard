@@ -11,6 +11,8 @@
 //   note --bullet "…"                    -> append a bullet to the body
 //   needs-input [--body "…"]             -> deliberate hand-off (Needs Input)
 //   done-for-review                      -> ready for review (Task Completed)
+//   end                                  -> mark this session ended, if the
+//                                           dashboard setting allows it (#33)
 //
 // Utility:
 //   ensure-server        start the dashboard server if it is not running
@@ -337,6 +339,44 @@ async function claudeUpdate(fields, label) {
   process.exit(0);
 }
 
+// `status.js end`: the session marks its own card ended (issue #33). Read-only
+// resolution, not resolveOrCreateSession(): a session with no card has nothing
+// to end, and minting a card only to end it would put a ticket on the board for
+// a session that never earned one.
+//
+// The dashboard setting is off by default. A refusal on that ground exits 0
+// with a plain sentence, because it is not a failure Claude should retry or
+// report as an error — the user simply has not opted in.
+//
+// Run it LAST: every other subcommand goes through POST /api/cards, whose
+// upsert treats any write as the session resuming and clears the end.
+async function claudeEnd() {
+  const args = parseArgs(process.argv.slice(3));
+  await ensureServer();
+  const session = await resolveSession(args);
+  if (!session) {
+    process.stderr.write('[status] No card found for this session, so there is nothing to end.\n');
+    process.exit(1);
+  }
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(session) + '/self-end');
+  if (r.json && r.json.disabled) {
+    process.stdout.write('[status] Not ended: the dashboard setting "Let sessions mark themselves ' +
+      'ended" is off. Nothing else to do; do not retry.\n');
+    process.exit(0);
+  }
+  if (r.status === 404) {
+    process.stderr.write('[status] No card found for session ' + session + ', so there is nothing to end.\n');
+    process.exit(1);
+  }
+  if (!r.ok) {
+    process.stderr.write('[status] end failed (' + r.status + ').\n');
+    process.exit(1);
+  }
+  process.stdout.write('[status] Session marked ended — card ' + session +
+    '. A later prompt in this session reopens it.\n');
+  process.exit(0);
+}
+
 async function main() {
   const cmd = process.argv[2];
   switch (cmd) {
@@ -350,6 +390,7 @@ async function main() {
     case 'note': return claudeUpdate({ auto: false }, 'noted');
     case 'needs-input': return claudeUpdate({ column: 'needs_input', auto: false }, 'Needs Input');
     case 'done-for-review': return claudeUpdate({ column: 'task_completed', auto: false }, 'Ready for Review');
+    case 'end': return claudeEnd();
 
     case 'ensure-server': {
       const ok = await ensureServer();
@@ -370,7 +411,7 @@ async function main() {
     }
     default:
       process.stderr.write('Usage: status.js <hook-user-prompt|hook-stop|hook-post-edit|hook-session-end|' +
-        'set|note|needs-input|done-for-review|ensure-server|url|whoami> [--flags]\n');
+        'set|note|needs-input|done-for-review|end|ensure-server|url|whoami> [--flags]\n');
       process.exit(1);
   }
 }

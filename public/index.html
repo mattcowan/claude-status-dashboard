@@ -43,6 +43,7 @@
     <span class="spacer"></span>
 
     <label class="toggle" title="Desktop notification when a card lands in Needs Input or Ready for Review"><input type="checkbox" id="notifyToggle"> 🔔 Notify</label>
+    <button type="button" class="ghost small" id="settingsOpen" aria-haspopup="dialog">⚙ Settings</button>
     <span class="refresh-note" id="refreshNote"></span>
 
     <!-- Row 2, inside the same sticky header: board-only controls. Hidden
@@ -222,6 +223,53 @@
       <div class="pe-actions">
         <button type="button" id="projectEditCancel">Cancel</button>
         <button type="submit" class="primary" id="projectEditSave">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Server-side settings (data/settings.json). The same native modal
+       <dialog> pattern as the project editor above, for the same reasons. It
+       has its own topbar button rather than living only behind the usage
+       strip's ⚙: the strip is hidden until usage data exists, and a setting
+       that is unreachable on a fresh install is not a setting. -->
+  <dialog id="settingsDialog" class="project-edit settings-dialog" aria-labelledby="settingsTitle">
+    <form id="settingsForm" method="dialog" novalidate>
+      <h2 id="settingsTitle">Settings</h2>
+      <p class="pe-path">Saved by the dashboard server, so they apply in every browser.</p>
+
+      <fieldset class="st-group">
+        <legend>Sessions</legend>
+        <label class="st-check">
+          <input type="checkbox" id="settingSelfEnd" aria-describedby="settingSelfEndHint">
+          Let sessions mark themselves ended
+        </label>
+        <p class="pe-hint" id="settingSelfEndHint">When this is on, Claude can run <code>status.js end</code> to mark its own card ended. The card stays in its column. The next prompt in that session reopens it. When this is off, the command does nothing.</p>
+      </fieldset>
+
+      <fieldset class="st-group">
+        <legend>Usage</legend>
+        <label class="st-check">
+          <input type="checkbox" id="settingUsagePoll" aria-describedby="settingUsagePollHint">
+          Poll usage in the background
+        </label>
+        <div class="st-row">
+          <label for="settingUsageInterval">How often</label>
+          <select id="settingUsageInterval">
+            <option value="300000">Every 5 minutes</option>
+            <option value="600000">Every 10 minutes</option>
+            <option value="1800000">Every 30 minutes</option>
+          </select>
+        </div>
+        <p class="pe-hint" id="settingUsagePollHint">Usage refreshes when a session contacts the dashboard, and when you press ↻. Background polling also reads the (undocumented) usage endpoint on a timer when no session is active.</p>
+      </fieldset>
+
+      <!-- Same alert region as the project editor's: a failed save must be
+           heard while focus stays on Save. -->
+      <p class="pe-error" id="settingsError" role="alert"></p>
+
+      <div class="pe-actions">
+        <button type="button" id="settingsCancel">Cancel</button>
+        <button type="submit" class="primary" id="settingsSave">Save</button>
       </div>
     </form>
   </dialog>

@@ -43,7 +43,9 @@ the feature works.
    never paste its contents into a commit message, an issue, or a README
    example.
 5. **Claude never marks a card Done.** The `done` column is the user's alone.
-   The CLI has no `done` subcommand and must not grow one.
+   The CLI has no `done` subcommand and must not grow one. `status.js end`
+   (issue #33) is not an exception: it sets `sessionEndedAt` only, never the
+   column, and only when the user has turned the `selfEnd` setting on.
 
 ---
 

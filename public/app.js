@@ -242,6 +242,18 @@ const SESSION_STATE_TITLE = {
   ended: 'Session ended — its SessionEnd hook fired',
 };
 
+// The ended badge says who ended the session, because "its SessionEnd hook
+// fired" stopped being the only way once a session could end itself (#33).
+// Keys mirror ENDED_BY in lib/store.js — change both. A card with no endedBy
+// predates the field, when the hook was the only source.
+const ENDED_BY_TITLE = {
+  hook: SESSION_STATE_TITLE.ended,
+  self: 'Session ended — it marked itself ended',
+};
+function endedTitle(card) {
+  return ENDED_BY_TITLE[card.endedBy] || ENDED_BY_TITLE.hook;
+}
+
 // Branch link only for github.com repos — other hosts use different tree paths.
 function githubBranchUrl(repoUrl, branch) {
   if (!repoUrl || !branch) return null;
@@ -1737,7 +1749,7 @@ function cardNode(card, inArchive) {
     const life = sessionState(card);
     const b = badge(life, [el('span', { class: 'live-dot' }, []), life]);
     b.setAttribute('title', life === 'ended' && card.sessionEndedAt
-      ? SESSION_STATE_TITLE.ended + ' ' + relTime(card.sessionEndedAt)
+      ? endedTitle(card) + ' ' + relTime(card.sessionEndedAt)
       : SESSION_STATE_TITLE[life]);
     badges.appendChild(b);
   }
@@ -2365,48 +2377,69 @@ function renderUsage() {
     text: 'ⓘ',
     title: "Read from Anthropic's undocumented OAuth usage endpoint — buckets and labels may change or break without notice.",
   }, []));
-  const settingsBtn = el('button', { class: 'small ghost', title: 'Usage settings' }, ['⚙']);
-  settingsBtn.addEventListener('click', openUsageSettings);
+  const settingsBtn = el('button', { class: 'small ghost', title: 'Settings', 'aria-label': 'Settings', 'aria-haspopup': 'dialog' }, ['⚙']);
+  settingsBtn.addEventListener('click', openSettings);
   controls.appendChild(settingsBtn);
   strip.appendChild(controls);
 }
 
-async function openUsageSettings() {
-  const current = (await api('GET', '/api/settings')).json || { usagePoll: { enabled: false, intervalMs: 600000 } };
-  const overlay = el('div', { class: 'modal-overlay' }, []);
-  const close = () => document.body.removeChild(overlay);
+// ---------- settings dialog ----------
 
-  const enabled = el('input', { type: 'checkbox' }, []);
-  enabled.checked = !!current.usagePoll.enabled;
-  const interval = el('select', {}, [
-    el('option', { value: '300000', text: 'every 5 min' }, []),
-    el('option', { value: '600000', text: 'every 10 min' }, []),
-    el('option', { value: '1800000', text: 'every 30 min' }, []),
-  ]);
-  interval.value = String(current.usagePoll.intervalMs);
+// Server-side settings (lib/settings.js): the usage poll and, since #33,
+// whether a session may mark itself ended. One native <dialog> in index.html,
+// reached from the topbar's ⚙ Settings and from the usage strip's ⚙ — the
+// strip is hidden until usage data exists, so it cannot be the only door.
+//
+// The form is filled from a fresh GET on every open rather than from a cached
+// copy, so a change saved from another tab is what this one shows.
+async function openSettings() {
+  const dlg = document.getElementById('settingsDialog');
+  if (dlg.open) return;
+  const r = await api('GET', '/api/settings');
+  const cur = (r.ok && r.json) || {};
+  const poll = cur.usagePoll || { enabled: false, intervalMs: 600000 };
+  const selfEnd = cur.selfEnd || { enabled: false };
+  document.getElementById('settingSelfEnd').checked = !!selfEnd.enabled;
+  document.getElementById('settingUsagePoll').checked = !!poll.enabled;
+  const interval = document.getElementById('settingUsageInterval');
+  interval.value = String(poll.intervalMs);
+  // A stored interval that is not one of the options (hand-edited file) would
+  // leave the select blank; show the default instead of nothing.
   if (!interval.value) interval.value = '600000';
-
-  const modal = el('div', { class: 'modal' }, [
-    el('h3', { text: 'Usage settings' }, []),
-    el('p', { class: 'modal-note', text: 'Usage refreshes when sessions ping the dashboard and via the ↻ button. Background polling pings the (undocumented) endpoint on a timer even when nothing is active — off by default.' }, []),
-    el('div', { class: 'modal-row' }, [
-      el('label', { class: 'toggle' }, [enabled, ' Auto-poll usage']),
-      interval,
-    ]),
-    el('div', { class: 'modal-row' }, [
-      el('button', { class: 'small primary', onclick: async () => {
-        await api('POST', '/api/settings', {
-          usagePoll: { enabled: enabled.checked, intervalMs: parseInt(interval.value, 10) },
-        });
-        close();
-      } }, ['Save']),
-      el('button', { class: 'small ghost', onclick: close }, ['Cancel']),
-    ]),
-  ]);
-  overlay.appendChild(modal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  document.body.appendChild(overlay);
+  document.getElementById('settingsError').textContent = '';
+  dlg.showModal();
 }
+
+(function wireSettingsDialog() {
+  const dlg = document.getElementById('settingsDialog');
+  document.getElementById('settingsOpen').addEventListener('click', openSettings);
+  document.getElementById('settingsCancel').addEventListener('click', () => dlg.close());
+  document.getElementById('settingsForm').addEventListener('submit', async (e) => {
+    e.preventDefault(); // method=dialog would close before the save is known to have worked
+    const err = document.getElementById('settingsError');
+    err.textContent = '';
+    const r = await api('POST', '/api/settings', {
+      usagePoll: {
+        enabled: document.getElementById('settingUsagePoll').checked,
+        intervalMs: parseInt(document.getElementById('settingUsageInterval').value, 10),
+      },
+      selfEnd: { enabled: document.getElementById('settingSelfEnd').checked },
+    });
+    if (!r.ok) {
+      err.textContent = 'Could not save the settings' + (r.json && r.json.error ? ': ' + r.json.error : '.');
+      return;
+    }
+    dlg.close();
+  });
+  // The ⚙ in the usage strip is rebuilt on every usage render, so the
+  // browser's own focus return lands on a detached node; fall back to the
+  // topbar button, which is permanent.
+  dlg.addEventListener('close', () => {
+    if (document.activeElement === document.body || !document.activeElement) {
+      document.getElementById('settingsOpen').focus();
+    }
+  });
+})();
 
 // ---------- desktop notifications ----------
 

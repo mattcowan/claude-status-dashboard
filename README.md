@@ -37,6 +37,7 @@ its project folder, git remote and branch, the model that did the work, and a
 | Claude runs `status.js note` | Appends a bullet as the task sprawls. |
 | Claude runs `status.js needs-input` | Deliberate hand-off → **Needs Input**. |
 | Claude runs `status.js done-for-review` | Claude thinks it's ready → **Ready for Review**. |
+| Claude runs `status.js end` | Marks the session **ended**, if you turned on **Let sessions mark themselves ended** in **⚙ Settings**. Off by default. The card stays in its column. |
 | **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
 | **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running, the hook leaves a marker file. The server applies the marker when it next starts. |
@@ -134,7 +135,21 @@ node bin/status.js set --headline "Fix checkout tax rounding" --body "…"
 node bin/status.js note --bullet "Reproduced with a 3-item cart"
 node bin/status.js needs-input --body "Confirm whether the AJAX handler is public"
 node bin/status.js done-for-review
+node bin/status.js end
 ```
+
+**`end`** marks this session's card **ended**. It works only when
+**Let sessions mark themselves ended** is on in **⚙ Settings**. The setting is
+off by default. When it is off, `end` prints a message, changes nothing, and
+exits 0, so Claude does not treat it as an error.
+
+- `end` does not create a card, and it does not move the card to another
+  column. Ended is not Done.
+- `end` is a soft end. The next prompt in that session reopens the card, the
+  same as a resumed session. Any other `status.js` command reopens it too, so
+  `end` must be the last command.
+- The ended badge's tooltip says who ended the session: the `SessionEnd` hook,
+  or the session itself.
 
 **Session resolution** (so Claude rarely needs to know its id): `--session <id>`
 → the `CLAUDE_CODE_SESSION_ID` env var Claude Code exposes to Bash → the
@@ -344,8 +359,9 @@ and the % text, which carry the same meaning without relying on hue.
   `data/usage-last-raw.json` so `lib/usage.js` can be recalibrated against it.
 - **When it refreshes:** whenever a session pings the dashboard (throttled to
   once per 5 min), or via the strip's **↻** button (30s floor). Background
-  polling on a timer exists but is **off by default** — enable it in the strip's
-  **⚙** settings (persisted server-side in `data/settings.json`).
+  polling on a timer exists but is **off by default** — enable it in
+  **⚙ Settings** (topbar, or the strip's **⚙**). Settings are saved on the
+  server in `data/settings.json`.
 - If the token has expired, the strip says so; opening any Claude Code session
   refreshes it.
 
@@ -370,7 +386,7 @@ a fact:
 |---|---|
 | 🟢 **live** | Activity within the last 4 hours. The dot pulses. |
 | 🟠 **idle** | Quiet for 4+ hours with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
-| ⚪ **ended** | The session's `SessionEnd` hook fired. Definitive. |
+| ⚪ **ended** | The session's `SessionEnd` hook fired, or the session ran `status.js end` (only when that setting is on). Definitive. |
 
 `ended` is written by the `SessionEnd` hook, which is reliable but **not
 guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires

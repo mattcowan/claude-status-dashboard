@@ -152,3 +152,36 @@ test('a drained marker ends the card through the store', () => {
   pendingEnds.drain((session, when) => !!s.markSessionEnded(session, { at: when }), dir);
   assert.strictEqual(s.board.cards.s1.sessionEndedAt, at);
 });
+
+// ----- who ended it (issue #33) -----
+
+test('markSessionEnded records who ended the session', () => {
+  const s = fixture([card({ id: 'a' }), card({ id: 'b' })]);
+  s.markSessionEnded('a', { by: 'self' });
+  s.markSessionEnded('b');
+  assert.strictEqual(s.board.cards.a.endedBy, 'self');
+  assert.strictEqual(s.board.cards.a.history.at(-1).text, 'Session marked itself ended');
+  assert.strictEqual(s.board.cards.b.endedBy, 'hook');
+  assert.strictEqual(s.board.cards.b.history.at(-1).text, 'Session ended');
+});
+
+test('an unknown ender falls back to the hook rather than storing junk', () => {
+  const s = fixture([card()]);
+  s.markSessionEnded('s1', { by: '<script>' });
+  assert.strictEqual(s.board.cards.s1.endedBy, 'hook');
+});
+
+test('a self-end never moves the card', () => {
+  // Ended is not Done (CLAUDE.md constraint 5).
+  const s = fixture([card({ column: 'task_completed' })]);
+  s.markSessionEnded('s1', { by: 'self' });
+  assert.strictEqual(s.board.cards.s1.column, 'task_completed');
+});
+
+test('resuming the session clears the end and who ended it', () => {
+  const s = fixture([card()]);
+  s.markSessionEnded('s1', { by: 'self' });
+  s.upsertSession('s1', 'C:\\Sites\\alpha', 'prompt');
+  assert.strictEqual(s.board.cards.s1.sessionEndedAt, null);
+  assert.strictEqual(s.board.cards.s1.endedBy, null);
+});
