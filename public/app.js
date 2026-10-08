@@ -40,12 +40,22 @@ const state = {
   noteDraft: '',           // in-progress note text, kept across board re-renders
   noteCaret: null,         // caret offset within that draft, restored after a re-render
   noteFocus: null,         // {id,target:'input'|'button'} focus move queued for after render
+  // Selection mode (issue #34). Neither is persisted: a selection is about the
+  // cards on screen right now, and one restored on the next visit would act on
+  // cards nobody remembers ticking.
+  selecting: false,        // the ☐ Select toggle: checkboxes on cards + the bulk bar
+  selected: new Set(),     // card ids ticked — always a subset of what render() drew
 };
 
 // Column state from the previous refresh, for notification diffing. null until
 // the first refresh completes so a page load never fires a backlog of toasts.
 let prevColumns = null;
 let sseHealthy = false;
+// Ids of the cards the last render() drew, in board order (issue #34). "Select
+// all shown" selects exactly these, and the selection is pruned to them on
+// every render. Declared up here, not beside the selection code, so no early
+// render() can reach it before its `let` has run.
+let shownCardIds = [];
 
 // ---------- preferences (localStorage) ----------
 
@@ -249,6 +259,7 @@ const SESSION_STATE_TITLE = {
 const ENDED_BY_TITLE = {
   hook: SESSION_STATE_TITLE.ended,
   self: 'Session ended — it marked itself ended',
+  user: 'Marked ended from the dashboard',
 };
 function endedTitle(card) {
   return ENDED_BY_TITLE[card.endedBy] || ENDED_BY_TITLE.hook;
@@ -1637,8 +1648,9 @@ function cardNode(card, inArchive) {
   const editingNote = state.noteEditing === card.id;
   const draggable = !inArchive && !editingNote;
 
+  const selectable = !inArchive && state.selecting;
   const node = el('div', {
-    class: 'card',
+    class: 'card' + (selectable && state.selected.has(card.id) ? ' selected' : ''),
     style: 'border-left-color:' + colorOf(card.column),
     draggable: draggable ? 'true' : null,
     'data-id': card.id,
@@ -1664,6 +1676,28 @@ function cardNode(card, inArchive) {
       : el('div', { class: 'headline' }, [el('span', { class: 'placeholder', text: '(no headline yet)' }, [])]));
 
   const head = el('div', { class: 'card-head' }, [headlineEl]);
+  // Selection checkbox (issue #34), first in the header so it is the first
+  // stop on the card for keyboard users. Named after the card, because "Select"
+  // alone, repeated forty times down a column, tells a screen reader user
+  // nothing about which card a given box belongs to. data-select-id is how
+  // render() puts focus back on it after the rebuild.
+  if (selectable) {
+    const box = el('input', {
+      type: 'checkbox',
+      class: 'card-select',
+      'data-select-id': card.id,
+      'aria-label': 'Select: ' + (card.headline || card.autoTitle || card.projectLabel || card.id),
+    }, []);
+    box.checked = state.selected.has(card.id);
+    box.addEventListener('change', () => {
+      if (box.checked) state.selected.add(card.id);
+      else state.selected.delete(card.id);
+      render();
+    });
+    // A press on the box must not start a card drag.
+    box.addEventListener('mousedown', (e) => e.stopPropagation());
+    head.insertBefore(box, headlineEl);
+  }
   if (!inArchive) {
     const caret = el('button', {
       class: 'card-caret' + (isExpanded ? ' open' : ''),
@@ -2025,6 +2059,11 @@ function render() {
   // The board is rebuilt wholesale below, so note who holds focus first —
   // otherwise a refresh landing mid-edit would silently drop it.
   const keepNoteFocus = focusedNoteControl();
+  // Same for a selection checkbox: ticking one re-renders the board, and the
+  // box that was just pressed would otherwise be destroyed under the keyboard.
+  const active = document.activeElement;
+  const keepSelectFocus = active && active.dataset && active.dataset.selectId
+    ? active.dataset.selectId : null;
   board.innerHTML = '';
   board.classList.toggle('fill', state.fillWidth);
 
@@ -2112,7 +2151,23 @@ function render() {
   // Trailing "add column" affordance.
   board.appendChild(el('div', { class: 'add-col-tile', onclick: addColumn, title: 'Add a column' }, ['＋ Add column']));
 
+  // The selection only ever holds cards that are on screen. A card hidden by a
+  // filter, collapsed into a hidden Done column, archived from another tab or
+  // deleted drops out here, so a bulk action can never reach a card the person
+  // cannot see — the blind spot archiveDone() had to be fixed for.
+  shownCardIds = visible.reduce((ids, c) => ids.concat(byCol[c.key].map((card) => card.id)), []);
+  const shown = new Set(shownCardIds);
+  for (const id of state.selected) if (!shown.has(id)) state.selected.delete(id);
+  syncBulkBar();
+
   restoreNoteFocus(keepNoteFocus);
+  if (keepSelectFocus) {
+    // Compared through dataset rather than a selector, so a card id never has
+    // to be CSS-escaped.
+    const box = Array.from(board.querySelectorAll('.card-select'))
+      .find((b) => b.dataset.selectId === keepSelectFocus);
+    if (box) box.focus();
+  }
 
   // An open folder menu outlives the rebuild (it hangs off document.body), but
   // its card may have moved column or row — re-park it on the fresh badge.
@@ -2123,6 +2178,83 @@ function render() {
 }
 
 // ---------- card actions ----------
+
+// ----- selection mode (issue #34) -----
+
+function bulkSay(text) {
+  document.getElementById('bulkNote').textContent = text;
+}
+
+// The bar lives outside #boardView, so render() updates it in place instead of
+// rebuilding it. The Move dropdown goes through setOptions(), whose signature
+// check leaves an open list alone (CLAUDE.md: a re-render must not rebuild a
+// control that is open).
+function syncBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  const toggle = document.getElementById('selectToggle');
+  bar.classList.toggle('hidden', !state.selecting);
+  toggle.setAttribute('aria-pressed', state.selecting ? 'true' : 'false');
+  toggle.textContent = state.selecting ? '☑ Selecting' : '☐ Select';
+  if (!state.selecting) return;
+
+  const n = state.selected.size;
+  const count = document.getElementById('bulkCount');
+  const text = n + ' selected';
+  if (count.textContent !== text) count.textContent = text;
+  // aria-disabled, not disabled, for the reason #resetFilters gives: a button
+  // that goes disabled under the press that emptied the selection drops focus.
+  ['bulkEnd', 'bulkArchive', 'bulkMove', 'bulkClear'].forEach((id) => {
+    const b = document.getElementById(id);
+    b.setAttribute('aria-disabled', n ? 'false' : 'true');
+    b.classList.toggle('is-off', !n);
+  });
+
+  const sel = document.getElementById('bulkColumn');
+  const prev = sel.value;
+  setOptions(sel, state.columns.map((c) =>
+    '<option value="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + '</option>').join(''));
+  if (prev && state.columns.some((c) => c.key === prev)) sel.value = prev;
+}
+
+function setSelecting(on) {
+  state.selecting = on;
+  state.selected.clear();
+  bulkSay('');
+  render();
+}
+
+function plural(n, one) { return n + ' ' + one + (n === 1 ? '' : 's'); }
+
+// Run one bulk action on the selection and say what happened, including the
+// parts that did not: a card already ended, or one that left the board between
+// the click and the request (another tab archived it).
+async function bulkAct(action) {
+  const ids = Array.from(state.selected);
+  if (!ids.length) { bulkSay('Select one or more cards first.'); return; }
+  const body = { ids: ids, action: action };
+  if (action === 'move') body.column = document.getElementById('bulkColumn').value;
+  const r = await api('POST', '/api/bulk', body);
+  if (!r.ok || !r.json) {
+    bulkSay('Nothing changed: ' + ((r.json && r.json.error) || 'the request failed') + '.');
+    return;
+  }
+  const res = r.json;
+  const n = res.changed.length;
+  let msg = action === 'end' ? 'Marked ' + plural(n, 'card') + ' ended'
+    : action === 'archive' ? 'Archived ' + plural(n, 'card')
+    : 'Moved ' + plural(n, 'card') + ' to ' + labelOf(res.column);
+  const extra = [];
+  if (res.unchanged.length) {
+    extra.push(res.unchanged.length + (action === 'end' ? ' already ended' : ' already there'));
+  }
+  if (res.missing.length) extra.push(res.missing.length + ' no longer on the board');
+  if (extra.length) msg += ' (' + extra.join(', ') + ')';
+  bulkSay(msg + '.');
+  // Archived cards leave the board; the prune in render() would drop them
+  // anyway, but clearing them now keeps the count honest before the refetch.
+  if (action === 'archive') res.changed.forEach((id) => state.selected.delete(id));
+  refresh();
+}
 
 async function move(id, column) { await api('POST', '/api/cards/' + encodeURIComponent(id) + '/move', { column }); refresh(); }
 async function act(id, action) { await api('POST', '/api/cards/' + encodeURIComponent(id) + '/' + action); refresh(); }
@@ -2716,6 +2848,14 @@ function setView(which) {
   // The board filters act on the board and nothing else, so they go away with
   // it rather than sitting above a view they cannot filter.
   document.getElementById('boardToolbar').classList.toggle('hidden', next !== 'board');
+  // Selection mode goes with it: the bar acts on board cards, and a selection
+  // left behind on another tab would come back acting on cards from before.
+  if (next !== 'board' && state.selecting) {
+    state.selecting = false;
+    state.selected.clear();
+    bulkSay('');
+    syncBulkBar();
+  }
 
   // The folder menu hangs off document.body, so switching view would otherwise
   // leave it floating over a panel its anchor no longer belongs to.
@@ -2796,6 +2936,38 @@ projectSearchEl.addEventListener('keydown', (e) => {
   renderProjects();
 });
 document.getElementById('archiveDone').addEventListener('click', archiveDone);
+
+// Selection mode (issue #34). The aria-disabled buttons no-op through
+// bulkAct()'s empty-selection check, which also says why in the live region.
+document.getElementById('selectToggle').addEventListener('click', () => setSelecting(!state.selecting));
+document.getElementById('bulkEnd').addEventListener('click', () => bulkAct('end'));
+document.getElementById('bulkArchive').addEventListener('click', () => bulkAct('archive'));
+document.getElementById('bulkMove').addEventListener('click', () => bulkAct('move'));
+document.getElementById('bulkAll').addEventListener('click', () => {
+  shownCardIds.forEach((id) => state.selected.add(id));
+  bulkSay(plural(state.selected.size, 'card') + ' selected.');
+  render();
+});
+document.getElementById('bulkClear').addEventListener('click', () => {
+  if (!state.selected.size) { bulkSay('Nothing is selected.'); return; }
+  state.selected.clear();
+  bulkSay('Selection cleared.');
+  render();
+});
+// Escape anywhere in the bar, or on a card's checkbox, leaves selection mode —
+// the way out a keyboard user would try first. Not while the Move list is
+// open: there Escape belongs to the <select>.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !state.selecting) return;
+  const t = e.target;
+  const inBar = t && t.closest && t.closest('#bulkBar');
+  const onBox = t && t.classList && t.classList.contains('card-select');
+  if (!inBar && !onBox) return;
+  if (t.tagName === 'SELECT') return;
+  e.preventDefault();
+  setSelecting(false);
+  document.getElementById('selectToggle').focus();
+});
 
 // Notifications opt-in: permission is requested only from this explicit
 // gesture, never on page load.

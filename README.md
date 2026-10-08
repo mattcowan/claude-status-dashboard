@@ -41,7 +41,7 @@ its project folder, git remote and branch, the model that did the work, and a
 | **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
 | **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running, the hook leaves a marker file. The server applies the marker when it next starts. |
-| You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. |
+| You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. Select several cards to mark them ended, archive them, or move them (see [Selecting cards](#selecting-cards)). |
 
 The **⚙ auto-captured** badge is the tell: it means the Stop backstop moved the
 card because Claude didn't declare an outcome — as opposed to a deliberate
@@ -112,7 +112,7 @@ that were already open before you installed the hooks.
 | No cards appear at all | Hooks not firing. Most often `node` isn't on the PATH that Claude Code hands hooks — replace `"command": "node"` with an absolute binary path (e.g. `C:/Program Files/nodejs/node.exe`, or the output of `which node`). |
 | Cards appear but are all italic and **⚙ auto-captured** | Step 2 is missing. The hooks are working; Claude hasn't been told to write a status. |
 | Cards appear for some projects only | A project-level `CLAUDE.md` is in play instead of the global one. |
-| Cards stay **idle** and never turn **ended** | The `SessionEnd` hook has no `"timeout"`, so Claude Code stops it after 1.5 seconds. Add `"timeout": 10` to that hook (see [`examples/settings.hooks.json`](examples/settings.hooks.json)). Sessions that crash, or that close with the computer, never send an end signal. |
+| Cards stay **idle** and never turn **ended** | The `SessionEnd` hook has no `"timeout"`, so Claude Code stops it after 1.5 seconds. Add `"timeout": 10` to that hook (see [`examples/settings.hooks.json`](examples/settings.hooks.json)). Sessions that crash, or that close with the computer, never send an end signal. Mark those cards ended by hand (see [Selecting cards](#selecting-cards)). |
 | Port 4787 already in use | Another instance owns it (harmless — the server exits quietly). Change it with the `PORT` env var or by writing a number into `data/server.port`. |
 
 ---
@@ -419,6 +419,28 @@ state (or *Any state*). It's applied client-side, so it re-evaluates against the
 clock on every render — a card ages out of *Live* on its own without a
 round-trip — and the choice persists in `localStorage`. When it hides anything,
 the topbar says how many, so a filtered board never reads as an empty one.
+
+## Selecting cards
+
+Press **☐ Select** in the toolbar to act on several cards at once. Each card
+then shows a checkbox, and a bar under the toolbar shows these actions:
+
+| Action | What it does |
+|---|---|
+| **Mark ended** | Marks the sessions **ended**. Use this for sessions that closed without their `SessionEnd` hook. The cards stay in their columns. The tooltip on the badge says *Marked ended from the dashboard*. |
+| **Archive** | Moves the cards to the Archive, the same as each card's **Archive** button. |
+| **Move to … → Move** | Moves the cards to the column you choose, the same as a drag. You can choose **Done**. |
+| **Select all shown** | Selects every card that the board shows now. |
+| **Clear** | Clears the selection. |
+
+- The selection holds only cards that the board shows. If a filter hides a
+  selected card, or the card leaves the board, it is removed from the
+  selection. An action never changes a card that you cannot see.
+- After each action, the bar says what changed. It also says how many cards
+  were already in that state, and how many were no longer on the board.
+- Press **Escape** in the bar or on a checkbox, or press **☑ Selecting**, to
+  stop selecting. Changing to another tab also stops it. The selection is not
+  saved between visits.
 
 ## Plan & transcript on the card
 

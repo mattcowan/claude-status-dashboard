@@ -191,6 +191,21 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
    answering (with "no filters are active"), so it must not look pressable-and-
    broken. Muted, not greyed to the point of failing contrast — it is still
    readable text a screen reader will reach. */
+/* Selection bar (issue #34): a third header row under .toolbar, sharing its
+   look. The header's 16px row gap less the first .toolbar's 14px negative
+   bottom margin would leave a 2px sliver of header between the two bands;
+   -2px closes it, so the bar reads as part of the toolbar it belongs to. */
+.bulkbar { margin-top: -2px; }
+.bulk-count { font-size: 13px; font-weight: 600; min-width: 7em; }
+#selectToggle[aria-pressed="true"] { border-color: var(--accent-plain); color: var(--accent-plain); }
+.card-select { margin: 3px 0 0; width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; }
+.card-select:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
+/* An outline rather than a background, so the column colour on the left
+   border and the badge colours keep reading the same on a selected card. */
+.card.selected { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
+@media (forced-colors: active) {
+  .card.selected { outline-color: Highlight; }
+}
 button.is-off { color: var(--muted-2); border-color: var(--border); }
 button.is-off:hover { border-color: var(--border); }
 
@@ -1010,6 +1025,7 @@ a.badge.branch:hover { border-color: var(--accent-plain); background: var(--pane
 /* Settings dialog: the project editor's shell with one fieldset per area. Its
    own field classes, because .pe-field input is width:100% and would stretch
    a checkbox across the dialog. */
+.st-intro { margin: 0 0 14px; }
 .st-group { border: 0; padding: 0; margin: 0 0 16px; min-width: 0; }
 .st-group legend { padding: 0; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .st-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

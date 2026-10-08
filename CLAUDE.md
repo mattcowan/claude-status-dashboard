@@ -207,6 +207,11 @@ One file, no framework, no build. Conventions in force:
   one of them: `setOptions(sel, html)` for `<select>` options, and the
   `list.dataset.sig` check in `renderComboList()` for the project combobox.
   Both compare a signature of what would be drawn and bail when it matches.
+  Controls that must survive the rebuild can also live outside `#boardView`
+  altogether: the selection bar (`#bulkBar`, issue #34) does, and `render()`
+  only syncs it in place. A per-card control that takes focus (the note
+  editor, the selection checkbox) needs its focus put back after the rebuild —
+  see `focusedNoteControl()` and the `data-select-id` restore in `render()`.
 - **State lives in the `state` object at the top**, preferences persist through
   `loadPrefs()`/`savePrefs()` into one `localStorage` key. **Every persisted
   value is validated on read** against a known set, because a stale or

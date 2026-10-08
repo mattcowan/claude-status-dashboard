@@ -307,6 +307,17 @@ async function handleApi(req, res, pathname, query) {
     }
   }
 
+  // Bulk card actions from the board's selection bar (issue #34): mark ended,
+  // archive, or move several cards in one request. Not /api/cards/bulk: the
+  // per-card matcher below would read "bulk" as a card id. Gated like every
+  // other write, at the top of handleApi.
+  if (method === 'POST' && pathname === '/api/bulk') {
+    const body = await readBody(req);
+    const r = store.bulk(body.ids, body.action, body.column);
+    if (r.error) return sendJson(res, r.status || 400, { error: r.error });
+    return sendJson(res, 200, r);
+  }
+
   // Per-card routes: /api/cards/:id[/action]
   const m = pathname.match(/^\/api\/cards\/([^/]+)(?:\/([^/]+))?$/);
   if (m) {

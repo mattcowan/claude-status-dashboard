@@ -117,6 +117,32 @@
         <button type="button" class="ghost small" id="collapseAll" title="Collapse all cards">⤡ Collapse all</button>
       </span>
       <button type="button" class="ghost small" id="addColumn">＋ Column</button>
+      <!-- A toggle button (aria-pressed), not a checkbox: it switches the board
+           into a mode rather than setting a preference, and is not persisted. -->
+      <button type="button" class="ghost small" id="selectToggle" aria-pressed="false"
+              aria-controls="bulkBar">☐ Select</button>
+    </div>
+
+    <!-- Row 3, only while selecting (issue #34). Outside #boardView, which is
+         rebuilt on every render, so the Move dropdown and the live region are
+         never torn down under the person using them. -->
+    <div class="toolbar bulkbar hidden" id="bulkBar" role="region" aria-label="Selected cards">
+      <span class="bulk-count" id="bulkCount">0 selected</span>
+      <button type="button" class="small" id="bulkEnd" aria-disabled="true"
+              title="Mark the selected sessions ended — for sessions that closed without their SessionEnd hook firing">Mark ended</button>
+      <button type="button" class="small" id="bulkArchive" aria-disabled="true">Archive</button>
+      <span class="control">
+        <label for="bulkColumn">Move to</label>
+        <select id="bulkColumn"></select>
+        <button type="button" class="small" id="bulkMove" aria-disabled="true">Move</button>
+      </span>
+      <span class="btn-group">
+        <button type="button" class="ghost small" id="bulkAll">Select all shown</button>
+        <button type="button" class="ghost small" id="bulkClear" aria-disabled="true">Clear</button>
+      </span>
+      <!-- Reports each action's result. The board is rebuilt wholesale, so a
+           screen reader would otherwise hear nothing at all. -->
+      <span class="refresh-note filter-note" id="bulkNote" role="status" aria-live="polite"></span>
     </div>
   </header>
 
@@ -235,7 +261,7 @@
   <dialog id="settingsDialog" class="project-edit settings-dialog" aria-labelledby="settingsTitle">
     <form id="settingsForm" method="dialog" novalidate>
       <h2 id="settingsTitle">Settings</h2>
-      <p class="pe-path">Saved by the dashboard server, so they apply in every browser.</p>
+      <p class="pe-hint st-intro">Saved by the dashboard server, so they apply in every browser.</p>
 
       <fieldset class="st-group">
         <legend>Sessions</legend>
