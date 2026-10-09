@@ -185,3 +185,90 @@ test('resuming the session clears the end and who ended it', () => {
   assert.strictEqual(s.board.cards.s1.sessionEndedAt, null);
   assert.strictEqual(s.board.cards.s1.endedBy, null);
 });
+
+test('markSessionEnded never treats a prototype key as a card', () => {
+  const s = fixture([card()]);
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    assert.strictEqual(s.markSessionEnded(id), null);
+  }
+  assert.strictEqual({}.sessionEndedAt, undefined);
+  assert.strictEqual({}.endedBy, undefined);
+  assert.strictEqual({}.history, undefined);
+});
+
+test('a drained "__proto__" marker ends nothing', () => {
+  const dir = tmpDir();
+  const s = fixture([card()]);
+  assert.ok(pendingEnds.write('__proto__', hoursAgo(1), dir));
+  pendingEnds.drain((sess, at) => !!s.markSessionEnded(sess, { at: at }), dir);
+  assert.strictEqual({}.sessionEndedAt, undefined);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('write leaves only the finished marker, never its temp file', () => {
+  const dir = tmpDir();
+  assert.ok(pendingEnds.write('s1', hoursAgo(1), dir));
+  assert.deepStrictEqual(fs.readdirSync(dir), ['s1.json']);
+});
+
+test('getCard and getCardAnywhere never return a prototype member', () => {
+  const s = fixture([card()]);
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    assert.strictEqual(s.getCard(id), null);
+    assert.strictEqual(s.getCardAnywhere(id), null);
+  }
+  assert.strictEqual(s.getCard('s1').id, 's1');
+  assert.strictEqual(s.getCardAnywhere('s1').id, 's1');
+});
+
+test('the Stop backstop leaves an ended card in Working', () => {
+  const s = fixture([card({ column: 'working', sessionEndedAt: hoursAgo(0), endedBy: 'self' })]);
+  s.applyStopBackstop('s1', 'Finished the migration.');
+  const c = s.getCard('s1');
+  assert.strictEqual(c.column, 'working');
+  assert.ok(!c.autoMoved);
+  assert.strictEqual(c.leftOff.text, 'Finished the migration.');
+  assert.strictEqual(c.sessionEndedAt !== null, true);
+});
+
+test('the Stop backstop still moves a live card to Needs Input', () => {
+  const s = fixture([card({ column: 'working' })]);
+  s.applyStopBackstop('s1', 'Waiting on you.');
+  assert.strictEqual(s.getCard('s1').column, 'needs_input');
+  assert.strictEqual(s.getCard('s1').autoMoved, true);
+});
+
+test('no card method treats a prototype key as a card', () => {
+  const s = fixture([card({ column: 'working' })]);
+  const proto = Object.getPrototypeOf(s.board.cards);
+  const calls = [
+    (id) => s.upsertSession(id, 'C:\Sites\alpha', 'prompt'),
+    (id) => s.noteSkippedBefore(id, { count: 1, commands: ['git-review'] }),
+    (id) => s.noteSkipCommand(id, 'git-review'),
+    (id) => s.setModel(id, 'claude-opus-5-5'),
+    (id) => s.setRepoUrl(id, 'https://github.com/a/b'),
+    (id) => s.refreshRepoUrl(id, 'https://github.com/a/b'),
+    (id) => s.setSessionMeta(id, { aiTitle: 'x', slug: 'y', gitBranch: 'main' }),
+    (id) => s.updateCard(id, { headline: 'x', column: 'needs_input' }),
+    (id) => s.addExternalEdit(id, 'C:\elsewhere\f.txt'),
+    (id) => s.applyStopBackstop(id, 'left off'),
+    (id) => s.markSessionEnded(id),
+    (id) => s.moveCard(id, 'needs_input'),
+    (id) => s.archiveCard(id),
+    (id) => s.restoreCard(id),
+    (id) => s.deleteCard(id),
+  ];
+  for (const id of ['__proto__', 'constructor', 'toString']) {
+    for (const call of calls) {
+      const r = call(id);
+      assert.ok(!r || (r && r.id === undefined && !r.ok), 'acted on ' + id + ': ' + call);
+    }
+  }
+  assert.strictEqual(Object.getPrototypeOf(s.board.cards), proto);
+  assert.deepStrictEqual(Object.keys(s.board.cards), ['s1']);
+  assert.deepStrictEqual(Object.keys(s.archive.cards), []);
+  for (const k of ['sessionEndedAt', 'endedBy', 'history', 'column', 'lastActiveAt', 'headline', 'model', 'leftOff']) {
+    assert.strictEqual({}[k], undefined, 'Object.prototype gained ' + k);
+  }
+  assert.strictEqual(s.getCard('s1').column, 'working');
+});

@@ -34,7 +34,7 @@ card current — it's how I know what you're doing:
   session, with nothing more coming), mark it ended as your **last** status call:
   `node "<DASHBOARD_PATH>/bin/status.js" end`. If it says the setting is off,
   that is fine: do nothing more and do not retry. Don't run it on your own
-  judgement that the work is done — `done-for-review` is for that.
+  judgment that the work is done — `done-for-review` is for that.
 - You normally **don't** pass `--session` — the CLI identifies your card
   automatically from `CLAUDE_CODE_SESSION_ID` (and falls back to this folder).
 - If you set no status, a **Stop-hook backstop** captures where you left off and

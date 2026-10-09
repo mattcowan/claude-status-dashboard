@@ -38,7 +38,7 @@ its project folder, git remote and branch, the model that did the work, and a
 | Claude runs `status.js needs-input` | Deliberate hand-off → **Needs Input**. |
 | Claude runs `status.js done-for-review` | Claude thinks it's ready → **Ready for Review**. |
 | Claude runs `status.js end` | Marks the session **ended**, if you turned on **Let sessions mark themselves ended** in **⚙ Settings**. Off by default. The card stays in its column. |
-| **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. |
+| **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. If the session is already **ended**, the card stays in *Working*, because an ended session does not wait for you. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
 | **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running, the hook leaves a marker file. The server applies the marker when it next starts. |
 | You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. Select several cards to mark them ended, archive them, or move them (see [Selecting cards](#selecting-cards)). |
@@ -145,6 +145,9 @@ exits 0, so Claude does not treat it as an error.
 
 - `end` does not create a card, and it does not move the card to another
   column. Ended is not Done.
+- `end` needs the session id. It reads `CLAUDE_CODE_SESSION_ID`, or you can
+  pass `--session`. It does not guess the card from the folder, because two
+  sessions can share a folder.
 - `end` is a soft end. The next prompt in that session reopens the card, the
   same as a resumed session. Any other `status.js` command reopens it too, so
   `end` must be the last command.
@@ -392,15 +395,16 @@ a fact:
 guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires
 it. Claude Code also stops `SessionEnd` hooks after 1.5 seconds unless the hook
 sets a `"timeout"` — keep the one in
-[`examples/settings.hooks.json`](examples/settings.hooks.json).
+[`examples/settings.hooks.json`](examples/settings.hooks.json). So the absence
+of an end signal cannot be read as "still running." Earlier versions did read
+it that way, and cards sat there claiming **live** for days.
 
 The hook does not start the server, because that takes longer than the time
 limit. If the server is down, the hook writes a marker to `data/pending-ends/`.
 The server applies each marker at startup, and checks again every minute. A
 marker uses the time the session ended, not the time the server read it. The
 server ignores a marker that is older than the card's last activity, because
-that session was resumed after the marker was written. So the absence of an end signal cannot be read as "still running." Earlier
-versions did read it that way, and cards sat there claiming **live** for days.
+that session was resumed after the marker was written.
 
 **This is a longer threshold than the 💤 badge's, on purpose.** The two answer
 different questions. 💤 (10 minutes, `STALE_MS`) asks *is this waiting on

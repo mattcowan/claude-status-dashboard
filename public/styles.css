@@ -191,6 +191,9 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
    answering (with "no filters are active"), so it must not look pressable-and-
    broken. Muted, not greyed to the point of failing contrast — it is still
    readable text a screen reader will reach. */
+button.is-off { color: var(--muted-2); border-color: var(--border); }
+button.is-off:hover { border-color: var(--border); }
+
 /* Selection bar (issue #34): a third header row under .toolbar, sharing its
    look. The header's 16px row gap less the first .toolbar's 14px negative
    bottom margin would leave a 2px sliver of header between the two bands;
@@ -200,14 +203,12 @@ button.small { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
 #selectToggle[aria-pressed="true"] { border-color: var(--accent-plain); color: var(--accent-plain); }
 .card-select { margin: 3px 0 0; width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; }
 .card-select:focus-visible { outline: 2px solid var(--accent-plain); outline-offset: 2px; }
-/* An outline rather than a background, so the column colour on the left
-   border and the badge colours keep reading the same on a selected card. */
+/* An outline rather than a background, so the column color on the left
+   border and the badge colors keep reading the same on a selected card. */
 .card.selected { outline: 2px solid var(--accent-plain); outline-offset: 1px; }
 @media (forced-colors: active) {
   .card.selected { outline-color: Highlight; }
 }
-button.is-off { color: var(--muted-2); border-color: var(--border); }
-button.is-off:hover { border-color: var(--border); }
 
 /* ---------- project combobox (replaces the old <select>) ---------- */
 

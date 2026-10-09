@@ -13,7 +13,7 @@ const path = require('path');
 const url = require('url');
 
 const config = require('./lib/config');
-const { Store } = require('./lib/store');
+const { Store, isReservedId } = require('./lib/store');
 const repo = require('./lib/repo');
 const usage = require('./lib/usage');
 const settings = require('./lib/settings');
@@ -166,6 +166,10 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
+    // A prototype member name ("__proto__", "constructor") can never be a
+    // card id — see ownCard() in lib/store.js. upsertSession() refuses it too
+    // and returns null, which the lines below would then dereference.
+    if (isReservedId(body.session)) return sendJson(res, 400, { error: 'invalid session id' });
     // Read before the upsert: skippedBefore only means something on the POST
     // that actually mints the card. On an existing card it would be reporting a
     // mid-session /git-commit-message, which is routine and not worth flagging.

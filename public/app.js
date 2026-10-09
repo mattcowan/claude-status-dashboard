@@ -2157,7 +2157,22 @@ function render() {
   // cannot see — the blind spot archiveDone() had to be fixed for.
   shownCardIds = visible.reduce((ids, c) => ids.concat(byCol[c.key].map((card) => card.id)), []);
   const shown = new Set(shownCardIds);
-  for (const id of state.selected) if (!shown.has(id)) state.selected.delete(id);
+  let pruned = 0;
+  for (const id of state.selected) {
+    if (!shown.has(id)) { state.selected.delete(id); pruned += 1; }
+  }
+  // Said out loud, because the count beside it is not a live region: without
+  // this, a filter change shrank the selection in silence and the bar's last
+  // message ("5 cards selected.") went on claiming the old number. A stale
+  // count message is replaced; an action's result is kept and added to, since
+  // a Move into a hidden Done column prunes on the refresh that follows it,
+  // and "Moved 2 cards to Done." must not be overwritten.
+  if (pruned) {
+    const prev = document.getElementById('bulkNote').textContent;
+    const msg = plural(pruned, 'card') + ' left the selection because the board no longer shows ' +
+      (pruned === 1 ? 'it' : 'them') + '. ' + state.selected.size + ' selected.';
+    bulkSay(prev && !/selected\.$/.test(prev) ? prev + ' ' + msg : msg);
+  }
   syncBulkBar();
 
   restoreNoteFocus(keepNoteFocus);

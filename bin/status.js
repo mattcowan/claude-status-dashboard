@@ -350,14 +350,21 @@ async function claudeUpdate(fields, label) {
 //
 // Run it LAST: every other subcommand goes through POST /api/cards, whose
 // upsert treats any write as the session resuming and clears the end.
+//
+// The session must be named (--session, or CLAUDE_CODE_SESSION_ID); there is
+// no cwd fallback here, unlike resolveSession(). The fallback returns the
+// most recently active card in the folder, which with two sessions open in
+// one project is as likely to be the OTHER one — and ending a live session's
+// card by mistake is worse than ending nothing.
 async function claudeEnd() {
   const args = parseArgs(process.argv.slice(3));
-  await ensureServer();
-  const session = await resolveSession(args);
+  const session = args.session || envSessionId();
   if (!session) {
-    process.stderr.write('[status] No card found for this session, so there is nothing to end.\n');
+    process.stderr.write('[status] Not ended: no session id. Pass --session, or run this from ' +
+      'inside a Claude Code session (CLAUDE_CODE_SESSION_ID).\n');
     process.exit(1);
   }
+  await ensureServer();
   const r = await request('POST', '/api/cards/' + encodeURIComponent(session) + '/self-end');
   if (r.json && r.json.disabled) {
     process.stdout.write('[status] Not ended: the dashboard setting "Let sessions mark themselves ' +
