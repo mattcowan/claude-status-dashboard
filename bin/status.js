@@ -11,6 +11,8 @@
 //   note --bullet "…"                    -> append a bullet to the body
 //   needs-input [--body "…"]             -> deliberate hand-off (Needs Input)
 //   done-for-review                      -> ready for review (Task Completed)
+//   end                                  -> mark this session ended, if the
+//                                           dashboard setting allows it (#33)
 //
 // Utility:
 //   ensure-server        start the dashboard server if it is not running
@@ -26,6 +28,7 @@ const config = require('../lib/config');
 const { normalizePath } = require('../lib/store');
 const transcript = require('../lib/transcript');
 const skipPrompts = require('../lib/skip-prompts');
+const pendingEnds = require('../lib/pending-ends');
 
 // ---------- tiny HTTP client ----------
 
@@ -91,20 +94,33 @@ async function ensureServer() {
 
 // ---------- input helpers ----------
 
-function readStdin() {
+// `complete(data)`, when given, lets the read finish as soon as the input is
+// whole rather than waiting for stdin to close. Hook input is one JSON object,
+// and an object only parses once its closing brace has arrived, so "parses" is
+// a safe test for "done". It matters for SessionEnd (issue #32): that hook runs
+// under a 1.5 s budget by default, and a parent that is slow to close the pipe
+// would otherwise spend up to 2.5 s of it here on the fallback timer.
+function readStdin(complete) {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve('');
     let data = '';
     process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (d) => { data += d; });
+    process.stdin.on('data', (d) => {
+      data += d;
+      if (complete && complete(data)) resolve(data);
+    });
     process.stdin.on('end', () => resolve(data));
     process.stdin.on('error', () => resolve(data));
     setTimeout(() => resolve(data), 2500).unref();
   });
 }
 
+function parsesAsObject(raw) {
+  try { const v = JSON.parse(raw); return !!v && typeof v === 'object'; } catch (_) { return false; }
+}
+
 async function readHookInput() {
-  const raw = await readStdin();
+  const raw = await readStdin(parsesAsObject);
   try { return JSON.parse(raw); } catch (_) { return {}; }
 }
 
@@ -277,12 +293,26 @@ async function hookPostEdit() {
   process.exit(0);
 }
 
+// Deliberately does NOT call ensureServer() (issue #32). Claude Code gives the
+// whole SessionEnd phase 1.5 s by default and kills the hook when it runs out,
+// and ensureServer() on a down server is a spawn plus up to 5 s of polling —
+// the hook used to die there, before its POST, and the card never left "idle".
+// Starting the dashboard just to write one timestamp was never worth it anyway.
+//
+// So: one POST with a timeout well inside the budget, and if it did not
+// succeed — nothing answered (server down, or too slow), or the server answered
+// with an error status — a marker file the server applies when it next runs;
+// see lib/pending-ends.js. An error status counts too: a 500 can come from
+// before markSessionEnded() ran, and treating it as delivered lost the end. A
+// timeout or error can also follow an end the server did apply; the marker is
+// then a no-op, because markSessionEnded() leaves an already-ended card alone.
 async function hookSessionEnd() {
   const input = await readHookInput();
-  await ensureServer();
   const session = input.session_id;
   if (session) {
-    await request('POST', '/api/hook/session-end', { session });
+    const at = new Date().toISOString();
+    const r = await request('POST', '/api/hook/session-end', { session }, 900);
+    if (!r.ok) pendingEnds.write(session, at);
   }
   process.exit(0);
 }
@@ -311,6 +341,51 @@ async function claudeUpdate(fields, label) {
   process.exit(0);
 }
 
+// `status.js end`: the session marks its own card ended (issue #33). Read-only
+// resolution, not resolveOrCreateSession(): a session with no card has nothing
+// to end, and minting a card only to end it would put a ticket on the board for
+// a session that never earned one.
+//
+// The dashboard setting is off by default. A refusal on that ground exits 0
+// with a plain sentence, because it is not a failure Claude should retry or
+// report as an error — the user simply has not opted in.
+//
+// Run it LAST: every other subcommand goes through POST /api/cards, whose
+// upsert treats any write as the session resuming and clears the end.
+//
+// The session must be named (--session, or CLAUDE_CODE_SESSION_ID); there is
+// no cwd fallback here, unlike resolveSession(). The fallback returns the
+// most recently active card in the folder, which with two sessions open in
+// one project is as likely to be the OTHER one — and ending a live session's
+// card by mistake is worse than ending nothing.
+async function claudeEnd() {
+  const args = parseArgs(process.argv.slice(3));
+  const session = args.session || envSessionId();
+  if (!session) {
+    process.stderr.write('[status] Not ended: no session id. Pass --session, or run this from ' +
+      'inside a Claude Code session (CLAUDE_CODE_SESSION_ID).\n');
+    process.exit(1);
+  }
+  await ensureServer();
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(session) + '/self-end');
+  if (r.json && r.json.disabled) {
+    process.stdout.write('[status] Not ended: the dashboard setting "Let sessions mark themselves ' +
+      'ended" is off. Nothing else to do; do not retry.\n');
+    process.exit(0);
+  }
+  if (r.status === 404) {
+    process.stderr.write('[status] No card found for session ' + session + ', so there is nothing to end.\n');
+    process.exit(1);
+  }
+  if (!r.ok) {
+    process.stderr.write('[status] end failed (' + r.status + ').\n');
+    process.exit(1);
+  }
+  process.stdout.write('[status] Session marked ended — card ' + session +
+    '. A later prompt in this session reopens it.\n');
+  process.exit(0);
+}
+
 async function main() {
   const cmd = process.argv[2];
   switch (cmd) {
@@ -324,6 +399,7 @@ async function main() {
     case 'note': return claudeUpdate({ auto: false }, 'noted');
     case 'needs-input': return claudeUpdate({ column: 'needs_input', auto: false }, 'Needs Input');
     case 'done-for-review': return claudeUpdate({ column: 'task_completed', auto: false }, 'Ready for Review');
+    case 'end': return claudeEnd();
 
     case 'ensure-server': {
       const ok = await ensureServer();
@@ -344,7 +420,7 @@ async function main() {
     }
     default:
       process.stderr.write('Usage: status.js <hook-user-prompt|hook-stop|hook-post-edit|hook-session-end|' +
-        'set|note|needs-input|done-for-review|ensure-server|url|whoami> [--flags]\n');
+        'set|note|needs-input|done-for-review|end|ensure-server|url|whoami> [--flags]\n');
       process.exit(1);
   }
 }

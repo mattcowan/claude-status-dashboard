@@ -43,7 +43,9 @@ the feature works.
    never paste its contents into a commit message, an issue, or a README
    example.
 5. **Claude never marks a card Done.** The `done` column is the user's alone.
-   The CLI has no `done` subcommand and must not grow one.
+   The CLI has no `done` subcommand and must not grow one. `status.js end`
+   (issue #33) is not an exception: it sets `sessionEndedAt` only, never the
+   column, and only when the user has turned the `selfEnd` setting on.
 
 ---
 
@@ -75,6 +77,13 @@ lib/project-meta.js  validation for the Projects view's edit dialog (name,
                      restores the detected values. Every link lands in an
                      href, so entries are revalidated on load, not only on
                      save.
+lib/pending-ends.js  durable SessionEnd markers (issue #32). The SessionEnd
+                     hook runs under a 1.5 s budget and must not spawn the
+                     server, so when the POST finds nobody home (or gets an
+                     error status) it drops a marker here; server.js drains
+                     them at boot and every minute, applying the hook's own
+                     end time, and deletes a marker only after flushSync()
+                     has put that end on disk.
 bin/status.js        the one CLI: hook subcommands, Claude subcommands,
                      ensure-server, session resolution
 public/index.html    markup for all three views (board/projects/archive)
@@ -103,11 +112,20 @@ Claude Code hook ──► bin/status.js <subcmd> ──► HTTP POST ──► 
 ```
 
 `bin/status.js` calls `ensureServer()` before most requests, which
-health-checks `/api/health` and spawns `server.js` detached if it is down. The
-one deliberate exception is the skip-listed branch of `hook-user-prompt`: a
-session that only ever runs `/git-commit-message` must not start the dashboard
-at all, so that path does its skip-list check against a local file *before* any
-network or spawn.
+health-checks `/api/health` and spawns `server.js` detached if it is down. There
+are two deliberate exceptions:
+
+- The skip-listed branch of `hook-user-prompt`: a session that only ever runs
+  `/git-commit-message` must not start the dashboard at all, so that path does
+  its skip-list check against a local file *before* any network or spawn.
+- `hook-session-end`. Claude Code cuts the whole SessionEnd phase off at
+  **1.5 s** unless a hook declares a `timeout` (the bound is
+  `max(1500, min(largest hook timeout, 60000))` ms, or
+  `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS`), and a spawn plus readiness poll
+  cannot fit. It POSTs once with a short timeout and falls back to a
+  `lib/pending-ends.js` marker. Issue #32 was this hook dying inside
+  `ensureServer()`, which left every such card on "idle" forever. Do not put
+  `ensureServer()` back on this path.
 
 ---
 
@@ -191,6 +209,11 @@ One file, no framework, no build. Conventions in force:
   one of them: `setOptions(sel, html)` for `<select>` options, and the
   `list.dataset.sig` check in `renderComboList()` for the project combobox.
   Both compare a signature of what would be drawn and bail when it matches.
+  Controls that must survive the rebuild can also live outside `#boardView`
+  altogether: the selection bar (`#bulkBar`, issue #34) does, and `render()`
+  only syncs it in place. A per-card control that takes focus (the note
+  editor, the selection checkbox) needs its focus put back after the rebuild —
+  see `focusedNoteControl()` and the `data-select-id` restore in `render()`.
 - **State lives in the `state` object at the top**, preferences persist through
   `loadPrefs()`/`savePrefs()` into one `localStorage` key. **Every persisted
   value is validated on read** against a known set, because a stale or

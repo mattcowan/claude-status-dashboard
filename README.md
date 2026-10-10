@@ -37,10 +37,11 @@ its project folder, git remote and branch, the model that did the work, and a
 | Claude runs `status.js note` | Appends a bullet as the task sprawls. |
 | Claude runs `status.js needs-input` | Deliberate hand-off → **Needs Input**. |
 | Claude runs `status.js done-for-review` | Claude thinks it's ready → **Ready for Review**. |
-| **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. |
+| Claude runs `status.js end` | Marks the session **ended**, if you turned on **Let sessions mark themselves ended** in **⚙ Settings**. Off by default. The card stays in its column. |
+| **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. If the session is already **ended**, the card stays in *Working*, because an ended session does not wait for you. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
-| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). |
-| You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. |
+| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running or returns an error, the hook leaves a marker file. The server applies the marker when it next starts. |
+| You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. Select several cards to mark them ended, archive them, or move them (see [Selecting cards](#selecting-cards)). |
 
 The **⚙ auto-captured** badge is the tell: it means the Stop backstop moved the
 card because Claude didn't declare an outcome — as opposed to a deliberate
@@ -72,6 +73,11 @@ into the `hooks` object of your `~/.claude/settings.json`, substituting
 > **Merge, don't replace.** Each event holds an *array* of hook groups and Claude
 > Code runs all of them. If you already have a `Stop` or `UserPromptSubmit` hook,
 > append to that array — pasting over it silently disables what you had.
+
+> **Keep the `SessionEnd` timeout.** The `SessionEnd` entry sets
+> `"timeout": 10`. Without it, Claude Code gives all `SessionEnd` hooks together
+> 1.5 seconds and then stops them. A stopped hook cannot mark the card
+> **ended**, so the card stays **idle**.
 
 Restart Claude Code, send a prompt in any project, and a card should appear.
 If nothing shows up, see [Troubleshooting](#troubleshooting).
@@ -106,6 +112,7 @@ that were already open before you installed the hooks.
 | No cards appear at all | Hooks not firing. Most often `node` isn't on the PATH that Claude Code hands hooks — replace `"command": "node"` with an absolute binary path (e.g. `C:/Program Files/nodejs/node.exe`, or the output of `which node`). |
 | Cards appear but are all italic and **⚙ auto-captured** | Step 2 is missing. The hooks are working; Claude hasn't been told to write a status. |
 | Cards appear for some projects only | A project-level `CLAUDE.md` is in play instead of the global one. |
+| Cards stay **idle** and never turn **ended** | The `SessionEnd` hook has no `"timeout"`, so Claude Code stops it after 1.5 seconds. Add `"timeout": 10` to that hook (see [`examples/settings.hooks.json`](examples/settings.hooks.json)). Sessions that crash, or that close with the computer, never send an end signal. Mark those cards ended by hand (see [Selecting cards](#selecting-cards)). |
 | Port 4787 already in use | Another instance owns it (harmless — the server exits quietly). Change it with the `PORT` env var or by writing a number into `data/server.port`. |
 
 ---
@@ -128,7 +135,24 @@ node bin/status.js set --headline "Fix checkout tax rounding" --body "…"
 node bin/status.js note --bullet "Reproduced with a 3-item cart"
 node bin/status.js needs-input --body "Confirm whether the AJAX handler is public"
 node bin/status.js done-for-review
+node bin/status.js end
 ```
+
+**`end`** marks this session's card **ended**. It works only when
+**Let sessions mark themselves ended** is on in **⚙ Settings**. The setting is
+off by default. When it is off, `end` prints a message, changes nothing, and
+exits 0, so Claude does not treat it as an error.
+
+- `end` does not create a card, and it does not move the card to another
+  column. Ended is not Done.
+- `end` needs the session id. It reads `CLAUDE_CODE_SESSION_ID`, or you can
+  pass `--session`. It does not guess the card from the folder, because two
+  sessions can share a folder.
+- `end` is a soft end. The next prompt in that session reopens the card, the
+  same as a resumed session. Any other `status.js` command reopens it too, so
+  `end` must be the last command.
+- The ended badge's tooltip says who ended the session: the `SessionEnd` hook,
+  or the session itself.
 
 **Session resolution** (so Claude rarely needs to know its id): `--session <id>`
 → the `CLAUDE_CODE_SESSION_ID` env var Claude Code exposes to Bash → the
@@ -338,8 +362,9 @@ and the % text, which carry the same meaning without relying on hue.
   `data/usage-last-raw.json` so `lib/usage.js` can be recalibrated against it.
 - **When it refreshes:** whenever a session pings the dashboard (throttled to
   once per 5 min), or via the strip's **↻** button (30s floor). Background
-  polling on a timer exists but is **off by default** — enable it in the strip's
-  **⚙** settings (persisted server-side in `data/settings.json`).
+  polling on a timer exists but is **off by default** — enable it in
+  **⚙ Settings** (topbar, or the strip's **⚙**). Settings are saved on the
+  server in `data/settings.json`.
 - If the token has expired, the strip says so; opening any Claude Code session
   refreshes it.
 
@@ -364,12 +389,24 @@ a fact:
 |---|---|
 | 🟢 **live** | Activity within the last 4 hours. The dot pulses. |
 | 🟠 **idle** | Quiet for 4+ hours with no end signal. May still be open, may be long gone — we can't tell. No pulse. |
-| ⚪ **ended** | The session's `SessionEnd` hook fired. Definitive. |
+| ⚪ **ended** | The session's `SessionEnd` hook fired, or the session ran `status.js end` (only when that setting is on). Definitive. |
 
 `ended` is written by the `SessionEnd` hook, which is reliable but **not
 guaranteed** — a session lost to a crash, a reboot, or a force-quit never fires
-it. So the absence of an end signal cannot be read as "still running." Earlier
-versions did read it that way, and cards sat there claiming **live** for days.
+it. Claude Code also stops `SessionEnd` hooks after 1.5 seconds unless the hook
+sets a `"timeout"` — keep the one in
+[`examples/settings.hooks.json`](examples/settings.hooks.json). So the absence
+of an end signal cannot be read as "still running." Earlier versions did read
+it that way, and cards sat there claiming **live** for days.
+
+The hook does not start the server, because that takes longer than the time
+limit. If the server is down or returns an error, the hook writes a marker to
+`data/pending-ends/`. The server applies each marker at startup, and checks
+again every minute. A marker uses the time the session ended, not the time the
+server read it. The server ignores a marker that is older than the card's last
+activity, because that session was resumed after the marker was written. The
+server deletes a marker only after it saves the board, so a crash does not lose
+the end.
 
 **This is a longer threshold than the 💤 badge's, on purpose.** The two answer
 different questions. 💤 (10 minutes, `STALE_MS`) asks *is this waiting on
@@ -388,6 +425,28 @@ state (or *Any state*). It's applied client-side, so it re-evaluates against the
 clock on every render — a card ages out of *Live* on its own without a
 round-trip — and the choice persists in `localStorage`. When it hides anything,
 the topbar says how many, so a filtered board never reads as an empty one.
+
+## Selecting cards
+
+Press **☐ Select** in the toolbar to act on several cards at once. Each card
+then shows a checkbox, and a bar under the toolbar shows these actions:
+
+| Action | What it does |
+|---|---|
+| **Mark ended** | Marks the sessions **ended**. Use this for sessions that closed without their `SessionEnd` hook. The cards stay in their columns. The tooltip on the badge says *Marked ended from the dashboard*. |
+| **Archive** | Moves the cards to the Archive, the same as each card's **Archive** button. |
+| **Move to … → Move** | Moves the cards to the column you choose, the same as a drag. You can choose **Done**. |
+| **Select all shown** | Selects every card that the board shows now. |
+| **Clear** | Clears the selection. |
+
+- The selection holds only cards that the board shows. If a filter hides a
+  selected card, or the card leaves the board, it is removed from the
+  selection. An action never changes a card that you cannot see.
+- After each action, the bar says what changed. It also says how many cards
+  were already in that state, and how many were no longer on the board.
+- Press **Escape** in the bar or on a checkbox, or press **☑ Selecting**, to
+  stop selecting. Changing to another tab also stops it. The selection is not
+  saved between visits.
 
 ## Plan & transcript on the card
 
@@ -632,11 +691,13 @@ lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
 lib/origin.js        the Origin + Host gate on every write
 lib/project-meta.js  checks for the edit dialog (name, links, keywords, note)
+lib/pending-ends.js  SessionEnd markers written when the server cannot take the end
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)
 data/                board.json, archive.json, settings.json, usage.json,
                      projects.json, skip-prompts.json, skipped-sessions/,
+                     pending-ends/,
                      server.port/pid/log  (runtime, gitignored)
 ```
 

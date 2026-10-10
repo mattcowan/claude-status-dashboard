@@ -13,12 +13,13 @@ const path = require('path');
 const url = require('url');
 
 const config = require('./lib/config');
-const { Store } = require('./lib/store');
+const { Store, isReservedId } = require('./lib/store');
 const repo = require('./lib/repo');
 const usage = require('./lib/usage');
 const settings = require('./lib/settings');
 const skipPrompts = require('./lib/skip-prompts');
 const origin = require('./lib/origin');
+const pendingEnds = require('./lib/pending-ends');
 
 const VERSION = require('./package.json').version;
 const store = new Store();
@@ -165,6 +166,10 @@ async function handleApi(req, res, pathname, query) {
   if (method === 'POST' && pathname === '/api/cards') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
+    // A prototype member name ("__proto__", "constructor") can never be a
+    // card id — see ownCard() in lib/store.js. upsertSession() refuses it too
+    // and returns null, which the lines below would then dereference.
+    if (isReservedId(body.session)) return sendJson(res, 400, { error: 'invalid session id' });
     // Read before the upsert: skippedBefore only means something on the POST
     // that actually mints the card. On an existing card it would be reporting a
     // mid-session /git-commit-message, which is routine and not worth flagging.
@@ -237,13 +242,15 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, { card });
   }
 
-  // Session end (SessionEnd hook)
+  // Session end (SessionEnd hook). markSessionEnded() answers null for "no
+  // change" (already ended) as well as "no card", so the response reads the
+  // card back rather than echoing that. The hook ignores the body either way.
   if (method === 'POST' && pathname === '/api/hook/session-end') {
     const body = await readBody(req);
     if (!body.session) return sendJson(res, 400, { error: 'session required' });
-    const card = store.markSessionEnded(body.session);
+    store.markSessionEnded(body.session);
     usage.maybeRefresh();
-    return sendJson(res, 200, { card });
+    return sendJson(res, 200, { card: store.getCard(body.session) });
   }
 
   // Usage limits (undocumented endpoint — see lib/usage.js caveats)
@@ -304,6 +311,17 @@ async function handleApi(req, res, pathname, query) {
     }
   }
 
+  // Bulk card actions from the board's selection bar (issue #34): mark ended,
+  // archive, or move several cards in one request. Not /api/cards/bulk: the
+  // per-card matcher below would read "bulk" as a card id. Gated like every
+  // other write, at the top of handleApi.
+  if (method === 'POST' && pathname === '/api/bulk') {
+    const body = await readBody(req);
+    const r = store.bulk(body.ids, body.action, body.column);
+    if (r.error) return sendJson(res, r.status || 400, { error: r.error });
+    return sendJson(res, 200, r);
+  }
+
   // Per-card routes: /api/cards/:id[/action]
   const m = pathname.match(/^\/api\/cards\/([^/]+)(?:\/([^/]+))?$/);
   if (m) {
@@ -330,6 +348,20 @@ async function handleApi(req, res, pathname, query) {
       const card = store.moveCard(id, body.column, body.auto);
       if (!card) return sendJson(res, 404, { error: 'card not found or bad column' });
       return sendJson(res, 200, { card });
+    }
+    // A session marking its own card ended (`status.js end`, issue #33). The
+    // write gate at the top already applies; this adds the user's setting on
+    // top, which is off by default. Refused with 409 and `disabled: true`
+    // rather than 403 so the CLI can tell "the setting is off" (say so, and
+    // stop) from "forbidden" (something is wrong). It never moves the card:
+    // ended is not Done.
+    if (method === 'POST' && action === 'self-end') {
+      if (!settings.getSettings().selfEnd.enabled) {
+        return sendJson(res, 409, { error: 'self-end is turned off in the dashboard settings', disabled: true });
+      }
+      if (!store.getCard(id)) return sendJson(res, 404, { error: 'card not found' });
+      store.markSessionEnded(id, { by: 'self' });
+      return sendJson(res, 200, { card: store.getCard(id) });
     }
     if (method === 'POST' && action === 'external-edit') {
       const body = await readBody(req);
@@ -479,8 +511,31 @@ server.listen(PORT, config.HOST, () => {
   // existed. Async and sequential, AFTER listen: the sync version could stall
   // startup ~2.5s per project.
   setImmediate(backfillRepoUrls);
+  setImmediate(drainPendingEnds);
   applyUsagePollTimer();
 });
+
+// Apply the SessionEnd markers hooks left while this server was down (issue
+// #32 — see lib/pending-ends.js). At boot, because a down server is exactly
+// when they are written; and on an interval as well, because a hook can find
+// the port closed in the second before a starting server binds it, and that
+// marker would otherwise wait for the next restart. A readdir of a directory
+// that is almost always empty is cheap enough to run every minute.
+//
+// flushSync() is the persist step: markSessionEnded() only schedules the
+// debounced save, and drain() deletes a marker only once the board holding
+// its end is on disk. flushSync() throws when a write fails, which keeps the
+// markers for the next drain. It runs only when a drain found a marker, so an
+// empty directory never costs a board write.
+function drainPendingEnds() {
+  try {
+    pendingEnds.drain(
+      (session, at) => !!store.markSessionEnded(session, { at: at }),
+      undefined,
+      () => store.flushSync());
+  } catch (_) { /* best effort */ }
+}
+setInterval(drainPendingEnds, 60 * 1000).unref();
 
 async function backfillRepoUrls() {
   for (const card of store.listCards(null)) {
