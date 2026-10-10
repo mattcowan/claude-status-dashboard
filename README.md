@@ -40,7 +40,7 @@ its project folder, git remote and branch, the model that did the work, and a
 | Claude runs `status.js end` | Marks the session **ended**, if you turned on **Let sessions mark themselves ended** in **⚙ Settings**. Off by default. The card stays in its column. |
 | **Stop** hook (backstop) | If Claude left the card in *Working*, captures "where it left off" from the transcript, moves it to **Needs Input**, and flags it **⚙ auto-captured**. If the session is already **ended**, the card stays in *Working*, because an ended session does not wait for you. |
 | **PostToolUse(Edit\|Write)** hook | Any file edited *outside* the project folder is listed on the card (⚠ external edits). |
-| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running, the hook leaves a marker file. The server applies the marker when it next starts. |
+| **SessionEnd** hook | Marks the session **ended** (live-dot turns grey). If the server is not running or returns an error, the hook leaves a marker file. The server applies the marker when it next starts. |
 | You, in the UI | **Mark done**, **Archive**, **Restore**, or **Delete**. Select several cards to mark them ended, archive them, or move them (see [Selecting cards](#selecting-cards)). |
 
 The **⚙ auto-captured** badge is the tell: it means the Stop backstop moved the
@@ -400,11 +400,13 @@ of an end signal cannot be read as "still running." Earlier versions did read
 it that way, and cards sat there claiming **live** for days.
 
 The hook does not start the server, because that takes longer than the time
-limit. If the server is down, the hook writes a marker to `data/pending-ends/`.
-The server applies each marker at startup, and checks again every minute. A
-marker uses the time the session ended, not the time the server read it. The
-server ignores a marker that is older than the card's last activity, because
-that session was resumed after the marker was written.
+limit. If the server is down or returns an error, the hook writes a marker to
+`data/pending-ends/`. The server applies each marker at startup, and checks
+again every minute. A marker uses the time the session ended, not the time the
+server read it. The server ignores a marker that is older than the card's last
+activity, because that session was resumed after the marker was written. The
+server deletes a marker only after it saves the board, so a crash does not lose
+the end.
 
 **This is a longer threshold than the 💤 badge's, on purpose.** The two answer
 different questions. 💤 (10 minutes, `STALE_MS`) asks *is this waiting on
@@ -689,7 +691,7 @@ lib/settings.js      server-side settings (data/settings.json)
 lib/skip-prompts.js  the skip list (commands that don't earn a card)
 lib/origin.js        the Origin + Host gate on every write
 lib/project-meta.js  checks for the edit dialog (name, links, keywords, note)
-lib/pending-ends.js  SessionEnd markers written while the server was down
+lib/pending-ends.js  SessionEnd markers written when the server cannot take the end
 bin/status.js        the one CLI (hooks + Claude subcommands + ensure-server)
 public/              index.html, app.js, styles.css  (self-contained UI)
 examples/            hook config, CLAUDE.md block, /post-status command (setup)

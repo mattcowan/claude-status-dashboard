@@ -521,9 +521,18 @@ server.listen(PORT, config.HOST, () => {
 // the port closed in the second before a starting server binds it, and that
 // marker would otherwise wait for the next restart. A readdir of a directory
 // that is almost always empty is cheap enough to run every minute.
+//
+// flushSync() is the persist step: markSessionEnded() only schedules the
+// debounced save, and drain() deletes a marker only once the board holding
+// its end is on disk. flushSync() throws when a write fails, which keeps the
+// markers for the next drain. It runs only when a drain found a marker, so an
+// empty directory never costs a board write.
 function drainPendingEnds() {
   try {
-    pendingEnds.drain((session, at) => !!store.markSessionEnded(session, { at: at }));
+    pendingEnds.drain(
+      (session, at) => !!store.markSessionEnded(session, { at: at }),
+      undefined,
+      () => store.flushSync());
   } catch (_) { /* best effort */ }
 }
 setInterval(drainPendingEnds, 60 * 1000).unref();

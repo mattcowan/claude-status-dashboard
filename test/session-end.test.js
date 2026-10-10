@@ -137,7 +137,10 @@ test('marker paths cannot escape the marker directory', () => {
   const p = pendingEnds.markerPath('../../etc/passwd', dir);
   assert.strictEqual(path.dirname(p), dir);
   assert.strictEqual(pendingEnds.markerPath('', dir), null);
-  assert.strictEqual(pendingEnds.write('///', null, dir), false);
+  assert.strictEqual(pendingEnds.markerPath(null, dir), null);
+  // Only an empty id has no marker. Any other id, even one made only of
+  // separators, is hashed into a plain name inside the directory.
+  assert.strictEqual(path.dirname(pendingEnds.markerPath('///', dir)), dir);
 });
 
 test('drain with no directory is a quiet zero', () => {
@@ -208,7 +211,7 @@ test('a drained "__proto__" marker ends nothing', () => {
 test('write leaves only the finished marker, never its temp file', () => {
   const dir = tmpDir();
   assert.ok(pendingEnds.write('s1', hoursAgo(1), dir));
-  assert.deepStrictEqual(fs.readdirSync(dir), ['s1.json']);
+  assert.deepStrictEqual(fs.readdirSync(dir), [path.basename(pendingEnds.markerPath('s1', dir))]);
 });
 
 test('getCard and getCardAnywhere never return a prototype member', () => {
@@ -271,4 +274,71 @@ test('no card method treats a prototype key as a card', () => {
     assert.strictEqual({}[k], undefined, 'Object.prototype gained ' + k);
   }
   assert.strictEqual(s.getCard('s1').column, 'working');
+});
+
+test('distinct session ids never share a marker file', () => {
+  const dir = tmpDir();
+  assert.notStrictEqual(pendingEnds.markerPath('a:b', dir), pendingEnds.markerPath('ab', dir));
+  assert.ok(pendingEnds.write('a:b', hoursAgo(1), dir));
+  assert.ok(pendingEnds.write('ab', hoursAgo(1), dir));
+  assert.ok(pendingEnds.write(':', hoursAgo(1), dir));
+  const seen = [];
+  pendingEnds.drain((sess) => { seen.push(sess); return true; }, dir);
+  assert.deepStrictEqual(seen.sort(), [':', 'a:b', 'ab']);
+});
+
+test('a marker written under the old naming still drains', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 's1.json'), JSON.stringify({ session: 's1', at: hoursAgo(1) }), 'utf8');
+  const seen = [];
+  pendingEnds.drain((sess) => { seen.push(sess); return true; }, dir);
+  assert.deepStrictEqual(seen, ['s1']);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('drain keeps every applied marker when the save fails', () => {
+  const dir = tmpDir();
+  pendingEnds.write('s1', hoursAgo(1), dir);
+  pendingEnds.write('s2', hoursAgo(1), dir);
+  const n = pendingEnds.drain(() => true, dir, () => { throw new Error('disk full'); });
+  assert.strictEqual(n, 2);
+  assert.strictEqual(fs.readdirSync(dir).length, 2);
+  // The next drain finds the ends already applied in memory (no change) but
+  // must still save before it deletes, or the end never reaches disk.
+  let saved = 0;
+  pendingEnds.drain(() => false, dir, () => { saved += 1; });
+  assert.strictEqual(saved, 1);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('drain saves once, and only when it consumed a marker', () => {
+  const dir = tmpDir();
+  let saved = 0;
+  const persist = () => { saved += 1; };
+  pendingEnds.drain(() => true, dir, persist);
+  assert.strictEqual(saved, 0);
+  const old = new Date(Date.now() - pendingEnds.MARKER_TTL_MS - 60000).toISOString();
+  pendingEnds.write('old', old, dir);
+  pendingEnds.drain(() => true, dir, persist);
+  assert.strictEqual(saved, 0, 'an expired marker needs no save');
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+  pendingEnds.write('s1', hoursAgo(1), dir);
+  pendingEnds.write('s2', hoursAgo(1), dir);
+  pendingEnds.drain(() => true, dir, persist);
+  assert.strictEqual(saved, 1);
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
+});
+
+test('drain keeps a marker whose apply throws, and still drains the rest', () => {
+  const dir = tmpDir();
+  pendingEnds.write('bad', hoursAgo(1), dir);
+  pendingEnds.write('good', hoursAgo(1), dir);
+  const seen = [];
+  pendingEnds.drain((sess) => {
+    if (sess === 'bad') throw new Error('boom');
+    seen.push(sess);
+    return true;
+  }, dir, () => {});
+  assert.deepStrictEqual(seen, ['good']);
+  assert.deepStrictEqual(fs.readdirSync(dir), [path.basename(pendingEnds.markerPath('bad', dir))]);
 });

@@ -79,9 +79,11 @@ lib/project-meta.js  validation for the Projects view's edit dialog (name,
                      save.
 lib/pending-ends.js  durable SessionEnd markers (issue #32). The SessionEnd
                      hook runs under a 1.5 s budget and must not spawn the
-                     server, so when the POST finds nobody home it drops a
-                     marker here; server.js drains them at boot and every
-                     minute, applying the hook's own end time.
+                     server, so when the POST finds nobody home (or gets an
+                     error status) it drops a marker here; server.js drains
+                     them at boot and every minute, applying the hook's own
+                     end time, and deletes a marker only after flushSync()
+                     has put that end on disk.
 bin/status.js        the one CLI: hook subcommands, Claude subcommands,
                      ensure-server, session resolution
 public/index.html    markup for all three views (board/projects/archive)

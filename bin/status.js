@@ -299,18 +299,20 @@ async function hookPostEdit() {
 // the hook used to die there, before its POST, and the card never left "idle".
 // Starting the dashboard just to write one timestamp was never worth it anyway.
 //
-// So: one POST with a timeout well inside the budget, and if nothing answered
-// (server down, or too slow), a marker file the server applies when it next
-// runs — see lib/pending-ends.js. A timeout can also fire after the server did
-// apply the end; the marker is then a no-op, because markSessionEnded() leaves
-// an already-ended card alone.
+// So: one POST with a timeout well inside the budget, and if it did not
+// succeed — nothing answered (server down, or too slow), or the server answered
+// with an error status — a marker file the server applies when it next runs;
+// see lib/pending-ends.js. An error status counts too: a 500 can come from
+// before markSessionEnded() ran, and treating it as delivered lost the end. A
+// timeout or error can also follow an end the server did apply; the marker is
+// then a no-op, because markSessionEnded() leaves an already-ended card alone.
 async function hookSessionEnd() {
   const input = await readHookInput();
   const session = input.session_id;
   if (session) {
     const at = new Date().toISOString();
     const r = await request('POST', '/api/hook/session-end', { session }, 900);
-    if (r.down) pendingEnds.write(session, at);
+    if (!r.ok) pendingEnds.write(session, at);
   }
   process.exit(0);
 }
